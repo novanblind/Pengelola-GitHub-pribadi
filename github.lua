@@ -145,7 +145,7 @@ prosesDownloadPembaruan = function(kodeBaru)
   local progress = ProgressDialog(service)
   progress.setTitle("Mengunduh pembaruan")
   progress.setMessage("Sedang memasang skrip...")
-  progress.setCancelable(false)
+  progress.setCancelable(true)
   progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
   progress.show()
 
@@ -185,7 +185,7 @@ cekPembaruan = function(manual)
     progress = ProgressDialog(service)
     progress.setTitle("Periksa versi baru")
     progress.setMessage("Memeriksa ke server GitHub...")
-    progress.setCancelable(false)
+    progress.setCancelable(true)
     progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
     progress.show()
   end
@@ -313,7 +313,7 @@ local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesa
     progress = ProgressDialog(service)
     progress.setTitle("Menghubungkan")
     progress.setMessage("Sedang memproses...")
-    progress.setCancelable(false)
+    progress.setCancelable(true)
     progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
     progress.show()
   end
@@ -414,10 +414,9 @@ aktifkanGitHubPagesOtomatis = function(fullName, branchName, token, callback)
 end
 
 -- ==========================================================
--- 1. DAFTAR & PENCARIAN REPOSITORI (DIURUTKAN TERAKHIR DIEDIT)
+-- 1. DAFTAR & PENCARIAN REPOSITORI (PENGURUTAN LATAR BELAKANG)
 -- ==========================================================
 daftarRepoSayaDialog = function(token)
-  -- Meminta data repositori langsung terurut berdasarkan updated secara menurun (desc)
   local endpoint = "https://api.github.com/user/repos?sort=updated&direction=desc&per_page=100&affiliation=owner"
   kirimPermintaanGitHub("GET", endpoint, token, nil, function(ok, res)
     if not ok then
@@ -425,52 +424,76 @@ daftarRepoSayaDialog = function(token)
       return
     end
 
-    local arr = JSONArray(res)
-    local total = arr.length()
-    if total == 0 then
-      if service.speak then service.speak("Belum ada repositori.") end
-      Toast.makeText(service, "Belum ada repositori.", Toast.LENGTH_SHORT).show()
-      menuUtama()
-      return
-    end
+    -- Pindahkan proses JSON dan pengurutan ke latar belakang agar UI dan kursor tetap halus
+    Thread(Runnable{
+      run = function()
+        local okProses, hasilData = pcall(function()
+          local arr = JSONArray(res)
+          local total = arr.length()
+          if total == 0 then return {}, {} end
 
-    local repoDataList = {}
-    for i = 0, total - 1 do
-      table.insert(repoDataList, arr.getJSONObject(i))
-    end
+          local repoDataList = {}
+          for i = 0, total - 1 do
+            table.insert(repoDataList, arr.getJSONObject(i))
+          end
 
-    -- Mengurutkan repositori: yang terakhir diedit/diperbarui tampil paling atas
-    table.sort(repoDataList, function(a, b)
-      return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
-    end)
+          -- Urutkan repositori: yang terakhir diedit tampil paling atas
+          table.sort(repoDataList, function(a, b)
+            return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
+          end)
 
-    local listItems = {}
-    for i, item in ipairs(repoDataList) do
-      local nama = item.optString("name", "")
-      local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
-      table.insert(listItems, string.format("%d. %s %s", i, nama, status))
-    end
+          local listItems = {}
+          for i, item in ipairs(repoDataList) do
+            local nama = item.optString("name", "")
+            local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
+            table.insert(listItems, string.format("%d. %s %s", i, nama, status))
+          end
 
-    if service.speak then service.speak("Ditemukan " .. total .. " repositori.") end
+          return {list = listItems, data = repoDataList}
+        end)
 
-    local b = AlertDialog.Builder(service)
-    b.setTitle("Repositori saya (" .. total .. ")")
-    b.setItems(listItems, DialogInterface.OnClickListener{
-      onClick = function(dialog, which)
-        kelolaRepoPilihanDialog(repoDataList[which + 1], token)
+        mainHandler.post(Runnable{
+          run = function()
+            if not okProses or not hasilData then
+              Toast.makeText(service, "Gagal memproses repositori.", Toast.LENGTH_SHORT).show()
+              return
+            end
+
+            local listItems = hasilData.list
+            local repoDataList = hasilData.data
+            local total = #repoDataList
+
+            if total == 0 then
+              if service.speak then service.speak("Belum ada repositori.") end
+              Toast.makeText(service, "Belum ada repositori.", Toast.LENGTH_SHORT).show()
+              menuUtama()
+              return
+            end
+
+            if service.speak then service.speak("Ditemukan " .. total .. " repositori.") end
+
+            local b = AlertDialog.Builder(service)
+            b.setTitle("Repositori saya (" .. total .. ")")
+            b.setItems(listItems, DialogInterface.OnClickListener{
+              onClick = function(dialog, which)
+                kelolaRepoPilihanDialog(repoDataList[which + 1], token)
+              end
+            })
+            b.setNegativeButton("kembali", DialogInterface.OnClickListener{
+              onClick = function() menuUtama() end
+            })
+            local diag = b.create()
+            diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+            diag.show()
+            aturTombolHurufKecil(diag, nil, "kembali", nil)
+          end
+        })
       end
-    })
-    b.setNegativeButton("kembali", DialogInterface.OnClickListener{
-      onClick = function() menuUtama() end
-    })
-    local diag = b.create()
-    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-    diag.show()
-    aturTombolHurufKecil(diag, nil, "kembali", nil)
+    }).start()
   end)
 end
 
--- Dialog Pencarian Repositori Cepat (Juga Terurut dari Terakhir Diedit)
+-- Dialog Pencarian Repositori Cepat
 cariRepoDialog = function(token)
   local layout = LinearLayout(service)
   layout.setOrientation(LinearLayout.VERTICAL)
@@ -505,53 +528,67 @@ cariRepoDialog = function(token)
           return
         end
 
-        local arr = JSONArray(res)
-        local total = arr.length()
-        local hasilData = {}
+        Thread(Runnable{
+          run = function()
+            local okFilter, hasilFilter = pcall(function()
+              local arr = JSONArray(res)
+              local total = arr.length()
+              local hasilData = {}
 
-        for i = 0, total - 1 do
-          local item = arr.getJSONObject(i)
-          local nama = item.optString("name", "")
-          if nama:lower():find(query, 1, true) then
-            table.insert(hasilData, item)
+              for i = 0, total - 1 do
+                local item = arr.getJSONObject(i)
+                local nama = item.optString("name", "")
+                if nama:lower():find(query, 1, true) then
+                  table.insert(hasilData, item)
+                end
+              end
+
+              table.sort(hasilData, function(a, b)
+                return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
+              end)
+
+              local hasilItems = {}
+              for i, item in ipairs(hasilData) do
+                local nama = item.optString("name", "")
+                local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
+                table.insert(hasilItems, string.format("%d. %s %s", i, nama, status))
+              end
+
+              return {list = hasilItems, data = hasilData}
+            end)
+
+            mainHandler.post(Runnable{
+              run = function()
+                if not okFilter or not hasilFilter or #hasilFilter.data == 0 then
+                  if service.speak then service.speak("Tidak ada repositori yang cocok.") end
+                  Toast.makeText(service, "Repositori tidak ditemukan.", Toast.LENGTH_SHORT).show()
+                  cariRepoDialog(token)
+                  return
+                end
+
+                local hasilItems = hasilFilter.list
+                local hasilData = hasilFilter.data
+
+                if service.speak then service.speak("Ditemukan " .. #hasilItems .. " repositori cocok.") end
+
+                local resB = AlertDialog.Builder(service)
+                resB.setTitle("Hasil pencarian (" .. #hasilItems .. ")")
+                resB.setItems(hasilItems, DialogInterface.OnClickListener{
+                  onClick = function(dRes, whichRes)
+                    kelolaRepoPilihanDialog(hasilData[whichRes + 1], token)
+                  end
+                })
+                resB.setNegativeButton("kembali", DialogInterface.OnClickListener{
+                  onClick = function() cariRepoDialog(token) end
+                })
+                local dHasil = resB.create()
+                dHasil.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+                dHasil.show()
+                aturTombolHurufKecil(dHasil, nil, "kembali", nil)
+              end
+            })
           end
-        end
-
-        if #hasilData == 0 then
-          if service.speak then service.speak("Tidak ada repositori yang cocok.") end
-          Toast.makeText(service, "Repositori tidak ditemukan.", Toast.LENGTH_SHORT).show()
-          cariRepoDialog(token)
-          return
-        end
-
-        -- Urutkan hasil pencarian: yang terakhir diedit paling atas
-        table.sort(hasilData, function(a, b)
-          return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
-        end)
-
-        local hasilItems = {}
-        for i, item in ipairs(hasilData) do
-          local nama = item.optString("name", "")
-          local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
-          table.insert(hasilItems, string.format("%d. %s %s", i, nama, status))
-        end
-
-        if service.speak then service.speak("Ditemukan " .. #hasilItems .. " repositori cocok.") end
-
-        local resB = AlertDialog.Builder(service)
-        resB.setTitle("Hasil pencarian (" .. #hasilItems .. ")")
-        resB.setItems(hasilItems, DialogInterface.OnClickListener{
-          onClick = function(dRes, whichRes)
-            kelolaRepoPilihanDialog(hasilData[whichRes + 1], token)
-          end
-        })
-        resB.setNegativeButton("kembali", DialogInterface.OnClickListener{
-          onClick = function() cariRepoDialog(token) end
-        })
-        local dHasil = resB.create()
-        dHasil.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-        dHasil.show()
-        aturTombolHurufKecil(dHasil, nil, "kembali", nil)
+        }).start()
       end)
     end
   })
@@ -1236,7 +1273,6 @@ buatRepoDialog = function(token)
 
   local diag = b.create()
   diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-  diag.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
   diag.show()
   aturTombolHurufKecil(diag, "buat repositori", "kembali", nil)
 end
@@ -1367,9 +1403,14 @@ menuUtama = function()
     return
   end
 
+  -- Beri jeda 3 detik untuk cek update otomatis agar tidak macet/bentrok saat membuka menu
   if not sudahCekOtomatis then
     sudahCekOtomatis = true
-    cekPembaruan(false)
+    mainHandler.postDelayed(Runnable{
+      run = function()
+        cekPembaruan(false)
+      end
+    }, 3000)
   end
 
   local menuItems = {
