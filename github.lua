@@ -17,15 +17,27 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
+-- Pengaturan Versi & Tautan Skrip Pembaruan
+local VERSI_SAAT_INI = "1.0"
+local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
+
+-- Jalur berkas skrip saat ini untuk pemasangan update otomatis
+local infoScript = debug.getinfo(1, "S")
+local JALUR_BERKAS_SCRIPT = (infoScript and infoScript.source and infoScript.source:sub(1, 1) == "@") and infoScript.source:sub(2) or ""
+
 -- Pengaturan nama SharedPreferences dan kunci unik
 local PREF_NAME = "github_acc_manager_exclusive_unique_cfg"
 local KEY_TOKEN = "key_github_user_pat_unique"
 local prefs = service.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
+-- Penanda agar periksa otomatis hanya berjalan sekali saat skrip baru dibuka
+local sudahCekOtomatis = false
+
 -- Deklarasi fungsi navigasi bertingkat
 local menuUtama, tampilkanDialogLogin
 local buatRepoDialog, tambahFileRepoDialog
 local daftarRepoSayaDialog, kelolaRepoPilihanDialog, bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog
+local cekPembaruan, prosesDownloadPembaruan
 
 -- Tautan otomatis membuat token dengan izin 'repo'
 local URL_GENERATE_TOKEN = "https://github.com/settings/tokens/new?description=Aksesibilitas+Android&scopes=repo"
@@ -58,6 +70,171 @@ local function aturTombolHurufKecil(diag, teksPositif, teksNegatif, teksNetral)
       end
     end
   end)
+end
+
+-- Fungsi pembanding versi semantik (misal: "1.1" lebih baru dari "1.0")
+local function bandingkanVersi(vBaru, vLama)
+  local tBaru = {}
+  for n in tostring(vBaru):gmatch("%d+") do table.insert(tBaru, tonumber(n)) end
+  local tLama = {}
+  for n in tostring(vLama):gmatch("%d+") do table.insert(tLama, tonumber(n)) end
+  for i = 1, math.max(#tBaru, #tLama) do
+    local nb = tBaru[i] or 0
+    local nl = tLama[i] or 0
+    if nb > nl then return true end
+    if nb < nl then return false end
+  end
+  return false
+end
+
+-- Fungsi menyimpan kode pembaruan langsung ke berkas skrip
+local function simpanFilePembaruan(konten)
+  local targetPath = JALUR_BERKAS_SCRIPT
+  if targetPath == "" or not File(targetPath).canWrite() then
+    if activity and activity.getLuaPath then
+      targetPath = tostring(activity.getLuaPath())
+    end
+  end
+  if targetPath ~= "" then
+    local file = File(targetPath)
+    local parent = file.getParentFile()
+    if parent and not parent.exists() then parent.mkdirs() end
+    local fos = FileOutputStream(file)
+    fos.write(String(konten).getBytes("UTF-8"))
+    fos.flush()
+    fos.close()
+    return true
+  end
+  return false
+end
+
+-- Menangani pemasangan pembaruan dan dialog hasil unduh
+prosesDownloadPembaruan = function(kodeBaru)
+  local progress = ProgressDialog(service)
+  progress.setTitle("Mengunduh pembaruan")
+  progress.setMessage("Sedang mengunduh dan memasang berkas skrip...")
+  progress.setCancelable(false)
+  progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+  progress.show()
+
+  Thread(Runnable{
+    run = function()
+      local ok, err = pcall(function()
+        simpanFilePembaruan(kodeBaru)
+      end)
+
+      mainHandler.post(Runnable{
+        run = function()
+          pcall(function() progress.dismiss() end)
+
+          if ok then
+            if service.speak then service.speak("Download selesai. Pembaruan telah dipasang.") end
+            local d = AlertDialog.Builder(service)
+            d.setTitle("Download selesai")
+            d.setMessage("Download selesai. Pembaruan telah berhasil dipasang.")
+            d.setPositiveButton("oke", nil)
+            local diag = d.create()
+            diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+            diag.show()
+            aturTombolHurufKecil(diag, "oke", nil, nil)
+          else
+            Toast.makeText(service, "Gagal memasang berkas pembaruan: " .. tostring(err), Toast.LENGTH_LONG).show()
+          end
+        end
+      })
+    end
+  }).start()
+end
+
+-- Fungsi periksa versi baru (otomatis maupun manual)
+cekPembaruan = function(manual)
+  local progress
+  if manual then
+    progress = ProgressDialog(service)
+    progress.setTitle("Periksa versi baru")
+    progress.setMessage("Sedang memeriksa pembaruan di server GitHub...")
+    progress.setCancelable(false)
+    progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    progress.show()
+  end
+
+  Thread(Runnable{
+    run = function()
+      local ok, res = pcall(function()
+        local url = URL(URL_RAW_SCRIPT)
+        local conn = url.openConnection()
+        conn.setRequestMethod("GET")
+        conn.setRequestProperty("User-Agent", "Android-Accessibility-Manager")
+        conn.setConnectTimeout(10000)
+        conn.setReadTimeout(15000)
+
+        local respCode = conn.getResponseCode()
+        if respCode == 200 then
+          local reader = BufferedReader(InputStreamReader(conn.getInputStream(), "UTF-8"))
+          local lines = {}
+          local line = reader.readLine()
+          while line ~= nil do
+            table.insert(lines, tostring(line))
+            line = reader.readLine()
+          end
+          reader.close()
+          return table.concat(lines, "\n")
+        else
+          error("Gagal terhubung ke raw GitHub. Kode HTTP: " .. respCode)
+        end
+      end)
+
+      mainHandler.post(Runnable{
+        run = function()
+          if progress then
+            pcall(function() progress.dismiss() end)
+          end
+
+          if ok then
+            local kodeRemote = res
+            local versiBaru = kodeRemote:match('VERSI_SAAT_INI%s*=%s*["\'](.-)["\']')
+
+            if versiBaru and bandingkanVersi(versiBaru, VERSI_SAAT_INI) then
+              local pesan = "versi baru tersedia: " .. versiBaru .. "\nversi yang digunakan: " .. VERSI_SAAT_INI
+              if service.speak then
+                service.speak("Versi baru tersedia: " .. versiBaru .. ". Versi yang digunakan: " .. VERSI_SAAT_INI)
+              end
+
+              local d = AlertDialog.Builder(service)
+              d.setTitle("Versi baru tersedia")
+              d.setMessage(pesan)
+              d.setPositiveButton("perbarui", DialogInterface.OnClickListener{
+                onClick = function()
+                  prosesDownloadPembaruan(kodeRemote)
+                end
+              })
+              d.setNegativeButton("nanti", nil)
+              local diag = d.create()
+              diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+              diag.show()
+              aturTombolHurufKecil(diag, "perbarui", "nanti", nil)
+            else
+              if manual then
+                if service.speak then service.speak("Versi baru tidak tersedia.") end
+                local d = AlertDialog.Builder(service)
+                d.setTitle("Periksa versi")
+                d.setMessage("Versi baru tidak tersedia.")
+                d.setPositiveButton("oke", nil)
+                local diag = d.create()
+                diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+                diag.show()
+                aturTombolHurufKecil(diag, "oke", nil, nil)
+              end
+            end
+          else
+            if manual then
+              Toast.makeText(service, "Gagal memeriksa pembaruan: " .. tostring(res), Toast.LENGTH_LONG).show()
+            end
+          end
+        end
+      })
+    end
+  }).start()
 end
 
 -- Fungsi membuka URL ke peramban
@@ -112,7 +289,6 @@ local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesa
         local url = URL(endpoint)
         local conn = url.openConnection()
 
-        -- Penanganan metode PATCH agar kompatibel dengan seluruh versi Android
         if metode == "PATCH" then
           local okPatch = pcall(function() conn.setRequestMethod("PATCH") end)
           if not okPatch then
@@ -779,11 +955,18 @@ menuUtama = function()
     return
   end
 
+  -- Jalankan pemeriksaan pembaruan otomatis satu kali saat skrip dibuka
+  if not sudahCekOtomatis then
+    sudahCekOtomatis = true
+    cekPembaruan(false)
+  end
+
   local menuItems = {
     "1. Daftar dan kelola repositori saya (buka repo, berkas & tautan)",
     "2. Buat repositori baru",
     "3. Buka halaman buat token di web",
-    "4. Ganti akun / keluar (hapus token)"
+    "4. Ganti akun / keluar (hapus token)",
+    "5. Periksa versi baru"
   }
 
   local b = AlertDialog.Builder(service)
@@ -800,6 +983,8 @@ menuUtama = function()
         prefs.edit().remove(KEY_TOKEN).apply()
         if service.speak then service.speak("Token dihapus. Anda telah keluar.") end
         Toast.makeText(service, "Token dihapus dari perangkat.", Toast.LENGTH_SHORT).show()
+      elseif which == 4 then
+        cekPembaruan(true)
       end
     end
   })
