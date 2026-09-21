@@ -17,8 +17,8 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
--- Pengaturan Versi & Tautan Skrip Pembaruan
-local VERSI_SAAT_INI = "1.0"
+-- Pengaturan Versi & Tautan Skrip Pembaruan (Dinaikkan ke versi 1.1)
+local VERSI_SAAT_INI = "1.1"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pemasangan update otomatis
@@ -955,7 +955,6 @@ menuUtama = function()
     return
   end
 
-  -- Jalankan pemeriksaan pembaruan otomatis satu kali saat skrip dibuka
   if not sudahCekOtomatis then
     sudahCekOtomatis = true
     cekPembaruan(false)
