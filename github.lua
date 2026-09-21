@@ -17,11 +17,11 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
--- Pengaturan Versi & Tautan Skrip Pembaruan (Dinaikkan ke versi 1.1)
-local VERSI_SAAT_INI = "1.1"
+-- Pengaturan Versi & Tautan Skrip Pembaruan (Dinaikkan ke versi 1.2)
+local VERSI_SAAT_INI = "1.2"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
--- Jalur berkas skrip saat ini untuk pemasangan update otomatis
+-- Jalur berkas skrip saat ini untuk pembaruan otomatis
 local infoScript = debug.getinfo(1, "S")
 local JALUR_BERKAS_SCRIPT = (infoScript and infoScript.source and infoScript.source:sub(1, 1) == "@") and infoScript.source:sub(2) or ""
 
@@ -30,19 +30,18 @@ local PREF_NAME = "github_acc_manager_exclusive_unique_cfg"
 local KEY_TOKEN = "key_github_user_pat_unique"
 local prefs = service.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
 
--- Penanda agar periksa otomatis hanya berjalan sekali saat skrip baru dibuka
 local sudahCekOtomatis = false
 
 -- Deklarasi fungsi navigasi bertingkat
 local menuUtama, tampilkanDialogLogin
 local buatRepoDialog, tambahFileRepoDialog
-local daftarRepoSayaDialog, kelolaRepoPilihanDialog, bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog
-local cekPembaruan, prosesDownloadPembaruan
+local daftarRepoSayaDialog, kelolaRepoPilihanDialog, bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog, hapusRepoDialog
+local cekPembaruan, prosesDownloadPembaruan, aktifkanGitHubPagesOtomatis
 
--- Tautan otomatis membuat token dengan izin 'repo'
-local URL_GENERATE_TOKEN = "https://github.com/settings/tokens/new?description=Aksesibilitas+Android&scopes=repo"
+-- Tautan otomatis pembuatan token dengan izin repo
+local URL_GENERATE_TOKEN = "https://github.com/settings/tokens/new?description=Aksesibilitas+Android&scopes=repo,delete_repo"
 
--- Fungsi penonaktif teks kapital bawaan Android (memaksa huruf kecil agar ramah pembaca layar)
+-- Fungsi penonaktif teks kapital bawaan Android (memaksa huruf kecil murni)
 local function aturTombolHurufKecil(diag, teksPositif, teksNegatif, teksNetral)
   pcall(function()
     if teksPositif then
@@ -72,7 +71,7 @@ local function aturTombolHurufKecil(diag, teksPositif, teksNegatif, teksNetral)
   end)
 end
 
--- Fungsi pembanding versi semantik (misal: "1.1" lebih baru dari "1.0")
+-- Fungsi pembanding versi
 local function bandingkanVersi(vBaru, vLama)
   local tBaru = {}
   for n in tostring(vBaru):gmatch("%d+") do table.insert(tBaru, tonumber(n)) end
@@ -87,7 +86,7 @@ local function bandingkanVersi(vBaru, vLama)
   return false
 end
 
--- Fungsi menyimpan kode pembaruan langsung ke berkas skrip
+-- Fungsi menyimpan kode pembaruan
 local function simpanFilePembaruan(konten)
   local targetPath = JALUR_BERKAS_SCRIPT
   if targetPath == "" or not File(targetPath).canWrite() then
@@ -108,11 +107,11 @@ local function simpanFilePembaruan(konten)
   return false
 end
 
--- Menangani pemasangan pembaruan dan dialog hasil unduh
+-- Pemasangan pembaruan otomatis
 prosesDownloadPembaruan = function(kodeBaru)
   local progress = ProgressDialog(service)
   progress.setTitle("Mengunduh pembaruan")
-  progress.setMessage("Sedang mengunduh dan memasang berkas skrip...")
+  progress.setMessage("Sedang memasang skrip...")
   progress.setCancelable(false)
   progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
   progress.show()
@@ -128,17 +127,17 @@ prosesDownloadPembaruan = function(kodeBaru)
           pcall(function() progress.dismiss() end)
 
           if ok then
-            if service.speak then service.speak("Download selesai. Pembaruan telah dipasang.") end
+            if service.speak then service.speak("Download selesai. Pembaruan terpasang.") end
             local d = AlertDialog.Builder(service)
             d.setTitle("Download selesai")
-            d.setMessage("Download selesai. Pembaruan telah berhasil dipasang.")
+            d.setMessage("Pembaruan skrip berhasil dipasang.")
             d.setPositiveButton("oke", nil)
             local diag = d.create()
             diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
             diag.show()
             aturTombolHurufKecil(diag, "oke", nil, nil)
           else
-            Toast.makeText(service, "Gagal memasang berkas pembaruan: " .. tostring(err), Toast.LENGTH_LONG).show()
+            Toast.makeText(service, "Gagal memasang pembaruan: " .. tostring(err), Toast.LENGTH_LONG).show()
           end
         end
       })
@@ -146,13 +145,13 @@ prosesDownloadPembaruan = function(kodeBaru)
   }).start()
 end
 
--- Fungsi periksa versi baru (otomatis maupun manual)
+-- Fungsi periksa versi baru
 cekPembaruan = function(manual)
   local progress
   if manual then
     progress = ProgressDialog(service)
     progress.setTitle("Periksa versi baru")
-    progress.setMessage("Sedang memeriksa pembaruan di server GitHub...")
+    progress.setMessage("Memeriksa ke server GitHub...")
     progress.setCancelable(false)
     progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
     progress.show()
@@ -180,7 +179,7 @@ cekPembaruan = function(manual)
           reader.close()
           return table.concat(lines, "\n")
         else
-          error("Gagal terhubung ke raw GitHub. Kode HTTP: " .. respCode)
+          error("Kode HTTP: " .. respCode)
         end
       end)
 
@@ -195,9 +194,9 @@ cekPembaruan = function(manual)
             local versiBaru = kodeRemote:match('VERSI_SAAT_INI%s*=%s*["\'](.-)["\']')
 
             if versiBaru and bandingkanVersi(versiBaru, VERSI_SAAT_INI) then
-              local pesan = "versi baru tersedia: " .. versiBaru .. "\nversi yang digunakan: " .. VERSI_SAAT_INI
+              local pesan = "Versi baru: " .. versiBaru .. "\nVersi digunakan: " .. VERSI_SAAT_INI
               if service.speak then
-                service.speak("Versi baru tersedia: " .. versiBaru .. ". Versi yang digunakan: " .. VERSI_SAAT_INI)
+                service.speak("Versi baru tersedia " .. versiBaru .. ". Versi yang digunakan " .. VERSI_SAAT_INI)
               end
 
               local d = AlertDialog.Builder(service)
@@ -228,7 +227,7 @@ cekPembaruan = function(manual)
             end
           else
             if manual then
-              Toast.makeText(service, "Gagal memeriksa pembaruan: " .. tostring(res), Toast.LENGTH_LONG).show()
+              Toast.makeText(service, "Gagal periksa pembaruan: " .. tostring(res), Toast.LENGTH_LONG).show()
             end
           end
         end
@@ -237,7 +236,7 @@ cekPembaruan = function(manual)
   }).start()
 end
 
--- Fungsi membuka URL ke peramban
+-- Fungsi buka URL ke browser
 local function bukaBrowser(urlTarget)
   local ok, err = pcall(function()
     local intent = Intent(Intent.ACTION_VIEW, Uri.parse(urlTarget))
@@ -245,27 +244,27 @@ local function bukaBrowser(urlTarget)
     service.startActivity(intent)
   end)
   if not ok then
-    Toast.makeText(service, "Gagal membuka browser: " .. tostring(err), Toast.LENGTH_SHORT).show()
+    Toast.makeText(service, "Gagal buka browser: " .. tostring(err), Toast.LENGTH_SHORT).show()
   end
 end
 
--- Fungsi menyalin teks ke papan klip
+-- Fungsi salin ke clipboard
 local function salinKeClipboard(label, teks)
   local clipboard = service.getSystemService(Context.CLIPBOARD_SERVICE)
   local clip = ClipData.newPlainText(label, teks)
   clipboard.setPrimaryClip(clip)
-  if service.speak then service.speak(label .. " berhasil disalin.") end
+  if service.speak then service.speak(label .. " disalin.") end
   Toast.makeText(service, label .. " disalin!", Toast.LENGTH_SHORT).show()
 end
 
--- Fungsi membagikan tautan via menu Share Android
+-- Fungsi bagikan tautan via Share Android
 local function bagikanTautan(judul, teks)
   local ok, err = pcall(function()
     local intent = Intent(Intent.ACTION_SEND)
     intent.setType("text/plain")
     intent.putExtra(Intent.EXTRA_SUBJECT, judul)
     intent.putExtra(Intent.EXTRA_TEXT, teks)
-    local chooser = Intent.createChooser(intent, "Bagikan tautan via")
+    local chooser = Intent.createChooser(intent, "Bagikan via")
     chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     service.startActivity(chooser)
   end)
@@ -274,14 +273,17 @@ local function bagikanTautan(judul, teks)
   end
 end
 
--- Permintaan HTTP API GitHub pada thread latar belakang
-local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesai)
-  local progress = ProgressDialog(service)
-  progress.setTitle("Menghubungkan ke GitHub")
-  progress.setMessage("Sedang memproses permintaan...")
-  progress.setCancelable(false)
-  progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-  progress.show()
+-- Permintaan HTTP GitHub API
+local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesai, diam)
+  local progress
+  if not diam then
+    progress = ProgressDialog(service)
+    progress.setTitle("Menghubungkan")
+    progress.setMessage("Sedang memproses...")
+    progress.setCancelable(false)
+    progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    progress.show()
+  end
 
   Thread(Runnable{
     run = function()
@@ -315,21 +317,29 @@ local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesa
         end
 
         local respCode = conn.getResponseCode()
-        local inputStream = (respCode >= 200 and respCode < 300) and conn.getInputStream() or conn.getErrorStream()
-        local reader = BufferedReader(InputStreamReader(inputStream, "UTF-8"))
-        local lines = {}
-        local line = reader.readLine()
-        while line ~= nil do
-          table.insert(lines, tostring(line))
-          line = reader.readLine()
+        local inputStream
+        if respCode >= 200 and respCode < 300 then
+          pcall(function() inputStream = conn.getInputStream() end)
+        else
+          pcall(function() inputStream = conn.getErrorStream() end)
         end
-        reader.close()
+
+        local lines = {}
+        if inputStream ~= nil then
+          local reader = BufferedReader(InputStreamReader(inputStream, "UTF-8"))
+          local line = reader.readLine()
+          while line ~= nil do
+            table.insert(lines, tostring(line))
+            line = reader.readLine()
+          end
+          reader.close()
+        end
 
         local hasil = table.concat(lines, "\n")
         if respCode >= 200 and respCode < 300 then
           return hasil
         else
-          local pesanError = "Gagal. Kode HTTP: " .. respCode
+          local pesanError = "Gagal. Kode: " .. respCode
           pcall(function()
             local jsonErr = JSONObject(hasil)
             pesanError = pesanError .. " (" .. jsonErr.optString("message", "") .. ")"
@@ -340,7 +350,9 @@ local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesa
 
       mainHandler.post(Runnable{
         run = function()
-          pcall(function() progress.dismiss() end)
+          if progress then
+            pcall(function() progress.dismiss() end)
+          end
           onSelesai(ok, res)
         end
       })
@@ -348,24 +360,42 @@ local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesa
   }).start()
 end
 
--- ==========================================================
--- NAVIGASI BERTINGKAT REPOSITORI & BERKAS
--- ==========================================================
+-- Aktivasi GitHub Pages otomatis
+aktifkanGitHubPagesOtomatis = function(fullName, branchName, token, callback)
+  local sourceObj = JSONObject()
+  sourceObj.put("branch", branchName)
+  sourceObj.put("path", "/")
 
--- 1. Menampilkan Semua Repositori Milik Akun
+  local payload = JSONObject()
+  payload.put("source", sourceObj)
+
+  local endpoint = "https://api.github.com/repos/" .. fullName .. "/pages"
+  kirimPermintaanGitHub("POST", endpoint, token, payload.toString(), function(ok, res)
+    if ok then
+      local pObj = JSONObject(res)
+      callback(true, pObj.optString("html_url", ""))
+    else
+      callback(false, tostring(res))
+    end
+  end, true)
+end
+
+-- ==========================================================
+-- 1. DAFTAR REPOSITORI SAYA
+-- ==========================================================
 daftarRepoSayaDialog = function(token)
   local endpoint = "https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner"
   kirimPermintaanGitHub("GET", endpoint, token, nil, function(ok, res)
     if not ok then
-      Toast.makeText(service, "Gagal mengambil daftar repositori: " .. tostring(res), Toast.LENGTH_LONG).show()
+      Toast.makeText(service, "Gagal memuat: " .. tostring(res), Toast.LENGTH_LONG).show()
       return
     end
 
     local arr = JSONArray(res)
     local total = arr.length()
     if total == 0 then
-      if service.speak then service.speak("Anda belum memiliki repositori.") end
-      Toast.makeText(service, "Belum ada repositori ditemukan.", Toast.LENGTH_SHORT).show()
+      if service.speak then service.speak("Belum ada repositori.") end
+      Toast.makeText(service, "Belum ada repositori.", Toast.LENGTH_SHORT).show()
       menuUtama()
       return
     end
@@ -375,10 +405,8 @@ daftarRepoSayaDialog = function(token)
     for i = 0, total - 1 do
       local item = arr.getJSONObject(i)
       local nama = item.optString("name", "")
-      local isPrivate = item.optBoolean("private", false)
-      local statusPrivasi = isPrivate and "[privat]" or "[publik]"
-      
-      table.insert(listItems, string.format("%d. %s %s", i + 1, nama, statusPrivasi))
+      local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
+      table.insert(listItems, string.format("%d. %s %s", i + 1, nama, status))
       table.insert(repoDataList, item)
     end
 
@@ -388,14 +416,11 @@ daftarRepoSayaDialog = function(token)
     b.setTitle("Repositori saya (" .. total .. ")")
     b.setItems(listItems, DialogInterface.OnClickListener{
       onClick = function(dialog, which)
-        local terpilih = repoDataList[which + 1]
-        kelolaRepoPilihanDialog(terpilih, token)
+        kelolaRepoPilihanDialog(repoDataList[which + 1], token)
       end
     })
     b.setNegativeButton("kembali", DialogInterface.OnClickListener{
-      onClick = function()
-        menuUtama()
-      end
+      onClick = function() menuUtama() end
     })
     local diag = b.create()
     diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
@@ -404,23 +429,26 @@ daftarRepoSayaDialog = function(token)
   end)
 end
 
--- 2. Menu Pengelolaan Repositori Tertentu
+-- ==========================================================
+-- 2. MENU PENGELOLAAN REPOSITORI
+-- ==========================================================
 kelolaRepoPilihanDialog = function(repoObj, token)
   local namaRepo = repoObj.optString("name", "")
   local fullName = repoObj.optString("full_name", "")
   local htmlUrl = repoObj.optString("html_url", "")
 
   local subMenus = {
-    "1. Jelajahi dan kelola berkas di dalamnya",
-    "2. Tambah berkas baru ke repo ini",
-    "3. Ganti nama repositori ini",
-    "4. Salin tautan halaman repositori",
-    "5. Bagikan tautan repositori",
-    "6. Buka repositori di browser"
+    "1. Buka berkas",
+    "2. Tambah berkas",
+    "3. Ganti nama repo",
+    "4. Salin tautan repo",
+    "5. Bagikan tautan repo",
+    "6. Buka di browser",
+    "7. Hapus repositori"
   }
 
   local b = AlertDialog.Builder(service)
-  b.setTitle("Repositori: " .. namaRepo)
+  b.setTitle("Repo: " .. namaRepo)
   b.setItems(subMenus, DialogInterface.OnClickListener{
     onClick = function(dialog, which)
       if which == 0 then
@@ -430,18 +458,18 @@ kelolaRepoPilihanDialog = function(repoObj, token)
       elseif which == 2 then
         gantiNamaRepoDialog(repoObj, token)
       elseif which == 3 then
-        salinKeClipboard("Tautan repositori", htmlUrl)
+        salinKeClipboard("Tautan repo", htmlUrl)
       elseif which == 4 then
-        bagikanTautan("Tautan repositori: " .. namaRepo, htmlUrl)
+        bagikanTautan("Repo: " .. namaRepo, htmlUrl)
       elseif which == 5 then
         bukaBrowser(htmlUrl)
+      elseif which == 6 then
+        hapusRepoDialog(repoObj, token)
       end
     end
   })
   b.setNegativeButton("kembali", DialogInterface.OnClickListener{
-    onClick = function()
-      daftarRepoSayaDialog(token)
-    end
+    onClick = function() daftarRepoSayaDialog(token) end
   })
   local diag = b.create()
   diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
@@ -449,7 +477,49 @@ kelolaRepoPilihanDialog = function(repoObj, token)
   aturTombolHurufKecil(diag, nil, "kembali", nil)
 end
 
--- 3. Dialog Ganti Nama Repositori
+-- ==========================================================
+-- 3. HAPUS REPOSITORI
+-- ==========================================================
+hapusRepoDialog = function(repoObj, token)
+  local namaRepo = repoObj.optString("name", "")
+  local fullName = repoObj.optString("full_name", "")
+
+  local b = AlertDialog.Builder(service)
+  b.setTitle("Hapus repositori?")
+  b.setMessage("Hapus '" .. namaRepo .. "' secara permanen dari GitHub?")
+  b.setPositiveButton("hapus repositori", DialogInterface.OnClickListener{
+    onClick = function()
+      local endpoint = "https://api.github.com/repos/" .. fullName
+      kirimPermintaanGitHub("DELETE", endpoint, token, nil, function(ok, res)
+        if ok then
+          if service.speak then service.speak("Repositori " .. namaRepo .. " berhasil dihapus.") end
+          Toast.makeText(service, "Repositori dihapus!", Toast.LENGTH_SHORT).show()
+          daftarRepoSayaDialog(token)
+        else
+          if service.speak then service.speak("Gagal menghapus.") end
+          local err = tostring(res)
+          if err:find("403") or err:find("404") then
+            err = err .. "\n(Perlu izin token 'delete_repo')"
+          end
+          Toast.makeText(service, err, Toast.LENGTH_LONG).show()
+          kelolaRepoPilihanDialog(repoObj, token)
+        end
+      end)
+    end
+  })
+  b.setNegativeButton("kembali", DialogInterface.OnClickListener{
+    onClick = function() kelolaRepoPilihanDialog(repoObj, token) end
+  })
+
+  local diag = b.create()
+  diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+  diag.show()
+  aturTombolHurufKecil(diag, "hapus repositori", "kembali", nil)
+end
+
+-- ==========================================================
+-- 4. GANTI NAMA REPOSITORI
+-- ==========================================================
 gantiNamaRepoDialog = function(repoObj, token)
   local namaLama = repoObj.optString("name", "")
   local fullName = repoObj.optString("full_name", "")
@@ -458,57 +528,49 @@ gantiNamaRepoDialog = function(repoObj, token)
   layout.setOrientation(LinearLayout.VERTICAL)
   layout.setPadding(40, 20, 40, 10)
 
-  local lblInfo = TextView(service)
-  lblInfo.setText("Nama baru repositori (tanpa spasi):")
-  layout.addView(lblInfo)
+  local lbl = TextView(service)
+  lbl.setText("Nama baru repo:")
+  layout.addView(lbl)
 
-  local inputNamaBaru = EditText(service)
-  inputNamaBaru.setText(namaLama)
-  inputNamaBaru.setSingleLine(true)
-  layout.addView(inputNamaBaru)
+  local input = EditText(service)
+  input.setText(namaLama)
+  input.setSingleLine(true)
+  layout.addView(input)
 
   local scroll = ScrollView(service)
   scroll.setFillViewport(true)
   scroll.addView(layout)
 
   local b = AlertDialog.Builder(service)
-  b.setTitle("Ganti nama: " .. namaLama)
+  b.setTitle("Ganti nama repo")
   b.setView(scroll)
   b.setPositiveButton("simpan nama baru", DialogInterface.OnClickListener{
-    onClick = function(dialog, which)
-      local namaBaru = tostring(inputNamaBaru.getText()):match("^%s*(.-)%s*$")
-      if namaBaru == "" then
-        Toast.makeText(service, "Nama repositori tidak boleh kosong!", Toast.LENGTH_SHORT).show()
-        return
-      end
-
-      if namaBaru == namaLama then
-        Toast.makeText(service, "Nama repositori belum diubah.", Toast.LENGTH_SHORT).show()
+    onClick = function()
+      local baru = tostring(input.getText()):match("^%s*(.-)%s*$")
+      if baru == "" or baru == namaLama then
         kelolaRepoPilihanDialog(repoObj, token)
         return
       end
 
       local payload = JSONObject()
-      payload.put("name", namaBaru)
+      payload.put("name", baru)
 
       local endpoint = "https://api.github.com/repos/" .. fullName
       kirimPermintaanGitHub("PATCH", endpoint, token, payload.toString(), function(ok, res)
         if ok then
           local updatedObj = JSONObject(res)
-          if service.speak then service.speak("Nama repositori berhasil diubah menjadi " .. namaBaru) end
-          Toast.makeText(service, "Nama repositori diperbarui!", Toast.LENGTH_SHORT).show()
+          if service.speak then service.speak("Nama repo diubah menjadi " .. baru) end
+          Toast.makeText(service, "Nama repo diperbarui!", Toast.LENGTH_SHORT).show()
           kelolaRepoPilihanDialog(updatedObj, token)
         else
-          Toast.makeText(service, "Gagal mengubah nama: " .. tostring(res), Toast.LENGTH_LONG).show()
+          Toast.makeText(service, "Gagal: " .. tostring(res), Toast.LENGTH_LONG).show()
           kelolaRepoPilihanDialog(repoObj, token)
         end
       end)
     end
   })
   b.setNegativeButton("kembali", DialogInterface.OnClickListener{
-    onClick = function()
-      kelolaRepoPilihanDialog(repoObj, token)
-    end
+    onClick = function() kelolaRepoPilihanDialog(repoObj, token) end
   })
 
   local diag = b.create()
@@ -518,12 +580,14 @@ gantiNamaRepoDialog = function(repoObj, token)
   aturTombolHurufKecil(diag, "simpan nama baru", "kembali", nil)
 end
 
--- 4. Penjelajah Berkas & Sub-folder Repositori
+-- ==========================================================
+-- 5. PENJELAJAH BERKAS & FOLDER
+-- ==========================================================
 bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
   local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. currentPath
   kirimPermintaanGitHub("GET", endpoint, token, nil, function(ok, res)
     if not ok then
-      Toast.makeText(service, "Gagal memuat isi folder: " .. tostring(res), Toast.LENGTH_LONG).show()
+      Toast.makeText(service, "Gagal: " .. tostring(res), Toast.LENGTH_LONG).show()
       return
     end
 
@@ -533,7 +597,7 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
     local dataItems = {}
 
     if currentPath ~= "" then
-      table.insert(menuItems, "Folder .. (kembali ke folder sebelumnya)")
+      table.insert(menuItems, "Folder .. (kembali)")
       table.insert(dataItems, {tipe = "kembali_folder"})
     end
 
@@ -554,12 +618,12 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
       })
     end
 
-    local judul = (currentPath == "") and ("Berkas: " .. fullName) or ("Folder: " .. currentPath)
+    local judul = (currentPath == "") and ("Berkas: " .. repoObj.optString("name", "")) or ("Folder: " .. currentPath)
     local b = AlertDialog.Builder(service)
     b.setTitle(judul)
 
     if #menuItems == 0 then
-      b.setMessage("Folder ini masih kosong.")
+      b.setMessage("Folder ini kosong.")
     else
       b.setItems(menuItems, DialogInterface.OnClickListener{
         onClick = function(dialog, which)
@@ -594,18 +658,20 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
   end)
 end
 
--- 5. Menu Aksi untuk Berkas Spesifik
+-- ==========================================================
+-- 6. MENU AKSI BERKAS SPESIFIK
+-- ==========================================================
 menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
   local opsiFile = {
-    "1. Salin tautan raw (unduh langsung / script updater)",
-    "2. Edit isi berkas ini",
-    "3. Salin tautan halaman web",
+    "1. Salin tautan raw (updater)",
+    "2. Edit berkas",
+    "3. Salin tautan web",
     "4. Bagikan tautan raw",
-    "5. Hapus berkas ini"
+    "5. Hapus berkas"
   }
 
   local b = AlertDialog.Builder(service)
-  b.setTitle("Kelola berkas: " .. fileData.name)
+  b.setTitle("Berkas: " .. fileData.name)
   b.setItems(opsiFile, DialogInterface.OnClickListener{
     onClick = function(dialog, which)
       if which == 0 then
@@ -626,39 +692,37 @@ menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
               menuAksiFile(fullName, fileData, token, currentPath, repoObj)
             end)
           else
-            Toast.makeText(service, "Gagal mengambil isi berkas: " .. tostring(res), Toast.LENGTH_LONG).show()
+            Toast.makeText(service, "Gagal membaca: " .. tostring(res), Toast.LENGTH_LONG).show()
           end
         end)
       elseif which == 2 then
-        salinKeClipboard("Tautan web berkas", fileData.html_url)
+        salinKeClipboard("Tautan web", fileData.html_url)
       elseif which == 3 then
-        bagikanTautan("Tautan berkas raw: " .. fileData.name, fileData.download_url)
+        bagikanTautan("Berkas raw: " .. fileData.name, fileData.download_url)
       elseif which == 4 then
         local konfirm = AlertDialog.Builder(service)
         konfirm.setTitle("Hapus berkas?")
-        konfirm.setMessage("Apakah Anda yakin ingin menghapus berkas " .. fileData.name .. " dari repositori?")
+        konfirm.setMessage("Hapus " .. fileData.name .. " dari repositori?")
         konfirm.setPositiveButton("hapus berkas", DialogInterface.OnClickListener{
           onClick = function()
             local delEndpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. fileData.path
             local delPayload = JSONObject()
-            delPayload.put("message", "Menghapus berkas " .. fileData.name .. " via Aksesibilitas Android")
+            delPayload.put("message", "Hapus " .. fileData.name)
             delPayload.put("sha", fileData.sha)
 
             kirimPermintaanGitHub("DELETE", delEndpoint, token, delPayload.toString(), function(sukses, hasilDel)
               if sukses then
-                if service.speak then service.speak("Berkas berhasil dihapus.") end
-                Toast.makeText(service, "Berkas berhasil dihapus!", Toast.LENGTH_SHORT).show()
+                if service.speak then service.speak("Berkas dihapus.") end
+                Toast.makeText(service, "Berkas dihapus!", Toast.LENGTH_SHORT).show()
                 bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj)
               else
-                Toast.makeText(service, "Gagal menghapus: " .. tostring(hasilDel), Toast.LENGTH_LONG).show()
+                Toast.makeText(service, "Gagal: " .. tostring(hasilDel), Toast.LENGTH_LONG).show()
               end
             end)
           end
         })
         konfirm.setNegativeButton("kembali", DialogInterface.OnClickListener{
-          onClick = function()
-            menuAksiFile(fullName, fileData, token, currentPath, repoObj)
-          end
+          onClick = function() menuAksiFile(fullName, fileData, token, currentPath, repoObj) end
         })
         local dKonfirm = konfirm.create()
         dKonfirm.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
@@ -668,9 +732,7 @@ menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
     end
   })
   b.setNegativeButton("kembali", DialogInterface.OnClickListener{
-    onClick = function()
-      bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj)
-    end
+    onClick = function() bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj) end
   })
   local diag = b.create()
   diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
@@ -678,7 +740,9 @@ menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
   aturTombolHurufKecil(diag, nil, "kembali", nil)
 end
 
--- 6. Editor Teks Berkas
+-- ==========================================================
+-- 7. EDITOR TEKS BERKAS
+-- ==========================================================
 formEditIsiBerkas = function(repo, path, sha, isiAwal, token, onSuccess, onBatal)
   local layout = LinearLayout(service)
   layout.setOrientation(LinearLayout.VERTICAL)
@@ -694,7 +758,7 @@ formEditIsiBerkas = function(repo, path, sha, isiAwal, token, onSuccess, onBatal
   scroll.addView(layout)
 
   local editBuilder = AlertDialog.Builder(service)
-  editBuilder.setTitle("Edit isi: " .. path)
+  editBuilder.setTitle("Edit: " .. path)
   editBuilder.setView(scroll)
   editBuilder.setPositiveButton("simpan perubahan", DialogInterface.OnClickListener{
     onClick = function()
@@ -703,28 +767,24 @@ formEditIsiBerkas = function(repo, path, sha, isiAwal, token, onSuccess, onBatal
 
       local endpoint = "https://api.github.com/repos/" .. repo .. "/contents/" .. path
       local putPayload = JSONObject()
-      putPayload.put("message", "Pembaruan isi " .. path .. " via Android")
+      putPayload.put("message", "Perbarui " .. path)
       putPayload.put("content", encoded)
       putPayload.put("sha", sha)
 
       kirimPermintaanGitHub("PUT", endpoint, token, putPayload.toString(), function(sukses, hasil)
         if sukses then
-          if service.speak then service.speak("Perubahan berkas berhasil disimpan ke GitHub.") end
-          Toast.makeText(service, "Berkas berhasil diperbarui!", Toast.LENGTH_SHORT).show()
+          if service.speak then service.speak("Perubahan disimpan.") end
+          Toast.makeText(service, "Berkas diperbarui!", Toast.LENGTH_SHORT).show()
           if onSuccess then onSuccess() end
         else
-          Toast.makeText(service, "Gagal simpan: " .. tostring(hasil), Toast.LENGTH_LONG).show()
+          Toast.makeText(service, "Gagal: " .. tostring(hasil), Toast.LENGTH_LONG).show()
         end
       end)
     end
   })
   editBuilder.setNegativeButton("kembali", DialogInterface.OnClickListener{
     onClick = function()
-      if onBatal then
-        onBatal()
-      else
-        menuUtama()
-      end
+      if onBatal then onBatal() else menuUtama() end
     end
   })
 
@@ -736,36 +796,34 @@ formEditIsiBerkas = function(repo, path, sha, isiAwal, token, onSuccess, onBatal
 end
 
 -- ==========================================================
--- PEMBUATAN REPOSITORI & PENAMBAHAN BERKAS
+-- 8. PEMBUATAN REPOSITORI BARU
 -- ==========================================================
-
--- Dialog Buat Repositori Baru
 buatRepoDialog = function(token)
   local layout = LinearLayout(service)
   layout.setOrientation(LinearLayout.VERTICAL)
   layout.setPadding(40, 20, 40, 10)
 
   local lblNama = TextView(service)
-  lblNama.setText("Nama repositori (tanpa spasi):")
+  lblNama.setText("Nama repo:")
   layout.addView(lblNama)
 
   local inputNama = EditText(service)
-  inputNama.setHint("contoh: plugin-baru")
+  inputNama.setHint("contoh: skrip-baru")
   inputNama.setSingleLine(true)
   layout.addView(inputNama)
 
   local lblDesc = TextView(service)
-  lblDesc.setText("Deskripsi repositori:")
+  lblDesc.setText("Deskripsi:")
   lblDesc.setPadding(0, 15, 0, 0)
   layout.addView(lblDesc)
 
   local inputDesc = EditText(service)
-  inputDesc.setHint("Deskripsi proyek")
+  inputDesc.setHint("Keterangan singkat")
   inputDesc.setSingleLine(true)
   layout.addView(inputDesc)
 
   local chkPrivate = CheckBox(service)
-  chkPrivate.setText("Jadikan repositori privat")
+  chkPrivate.setText("Jadikan privat")
   layout.addView(chkPrivate)
 
   local scroll = ScrollView(service)
@@ -776,72 +834,89 @@ buatRepoDialog = function(token)
   b.setTitle("Buat repositori baru")
   b.setView(scroll)
   b.setPositiveButton("buat repositori", DialogInterface.OnClickListener{
-    onClick = function(dialog, which)
+    onClick = function()
       local nama = tostring(inputNama.getText()):match("^%s*(.-)%s*$")
       local desc = tostring(inputDesc.getText()):match("^%s*(.-)%s*$")
       if nama == "" then
-        if service.speak then service.speak("Nama repositori wajib diisi.") end
+        if service.speak then service.speak("Nama repo wajib diisi.") end
         return
       end
 
+      local isPrivat = chkPrivate.isChecked()
       local payload = JSONObject()
       payload.put("name", nama)
       payload.put("description", desc)
-      payload.put("private", chkPrivate.isChecked())
+      payload.put("private", isPrivat)
       payload.put("auto_init", true)
 
       kirimPermintaanGitHub("POST", "https://api.github.com/user/repos", token, payload.toString(), function(ok, res)
         if ok then
           local obj = JSONObject(res)
+          local fullName = obj.optString("full_name", "")
+          local defaultBranch = obj.optString("default_branch", "main")
           local htmlUrl = obj.optString("html_url", "")
-          local d = AlertDialog.Builder(service)
-          d.setTitle("Repositori berhasil dibuat")
-          d.setMessage("Nama: " .. obj.optString("name", "") .. "\n\nTautan repositori:\n" .. htmlUrl)
-          d.setPositiveButton("salin tautan", DialogInterface.OnClickListener{
-            onClick = function() salinKeClipboard("Tautan repositori", htmlUrl) end
-          })
-          d.setNeutralButton("bagikan", DialogInterface.OnClickListener{
-            onClick = function() bagikanTautan("Tautan repositori GitHub", htmlUrl) end
-          })
-          d.setNegativeButton("kembali", DialogInterface.OnClickListener{
-            onClick = function() menuUtama() end
-          })
-          local diag = d.create()
-          diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-          diag.show()
-          aturTombolHurufKecil(diag, "salin tautan", "kembali", "bagikan")
+
+          mainHandler.postDelayed(Runnable{
+            run = function()
+              aktifkanGitHubPagesOtomatis(fullName, defaultBranch, token, function(suksesPages, infoPages)
+                local pesanDialog = "Nama: " .. obj.optString("name", "") .. "\nTautan: " .. htmlUrl
+                if suksesPages then
+                  pesanDialog = pesanDialog .. "\n\nGitHub Pages aktif:\n" .. infoPages
+                  if service.speak then service.speak("Repositori dan Pages berhasil diaktifkan.") end
+                else
+                  if service.speak then service.speak("Repositori berhasil dibuat.") end
+                end
+
+                local d = AlertDialog.Builder(service)
+                d.setTitle("Repositori dibuat")
+                d.setMessage(pesanDialog)
+                d.setPositiveButton("salin tautan", DialogInterface.OnClickListener{
+                  onClick = function() salinKeClipboard("Tautan repo", htmlUrl) end
+                })
+                d.setNeutralButton("bagikan", DialogInterface.OnClickListener{
+                  onClick = function() bagikanTautan("Repo: " .. nama, htmlUrl) end
+                })
+                d.setNegativeButton("kembali", DialogInterface.OnClickListener{
+                  onClick = function() menuUtama() end
+                })
+                local diag = d.create()
+                diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+                diag.show()
+                aturTombolHurufKecil(diag, "salin tautan", "kembali", "bagikan")
+              end)
+            end
+          }, 1500)
         else
-          if service.speak then service.speak("Gagal membuat repositori: " .. tostring(res)) end
+          if service.speak then service.speak("Gagal membuat repo.") end
           Toast.makeText(service, tostring(res), Toast.LENGTH_LONG).show()
         end
       end)
     end
   })
   b.setNegativeButton("kembali", DialogInterface.OnClickListener{
-    onClick = function()
-      menuUtama()
-    end
+    onClick = function() menuUtama() end
   })
 
   local diag = b.create()
   diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-  diag.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
   diag.show()
   aturTombolHurufKecil(diag, "buat repositori", "kembali", nil)
 end
 
--- Dialog Menambah Berkas Baru
+-- ==========================================================
+-- 9. TAMBAH BERKAS BARU
+-- ==========================================================
 tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
   local layout = LinearLayout(service)
   layout.setOrientation(LinearLayout.VERTICAL)
   layout.setPadding(40, 20, 40, 10)
 
   local lblRepo = TextView(service)
-  lblRepo.setText("Nama repositori:")
+  lblRepo.setText("Nama repo:")
   layout.addView(lblRepo)
 
   local inputRepo = EditText(service)
-  inputRepo.setHint("contoh: username/nama-repo")
+  inputRepo.setHint("username/nama-repo")
   inputRepo.setSingleLine(true)
   if repoOtomatis then
     inputRepo.setText(repoOtomatis)
@@ -854,7 +929,7 @@ tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
   layout.addView(lblPath)
 
   local inputPath = EditText(service)
-  inputPath.setHint("contoh: main.lua atau data.txt")
+  inputPath.setHint("contoh: main.lua")
   inputPath.setSingleLine(true)
   layout.addView(inputPath)
 
@@ -864,7 +939,7 @@ tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
   layout.addView(lblKonten)
 
   local inputKonten = EditText(service)
-  inputKonten.setHint("Ketik atau tempel isi berkas di sini...")
+  inputKonten.setHint("Ketik / tempel isi berkas...")
   inputKonten.setMinLines(5)
   layout.addView(inputKonten)
 
@@ -876,7 +951,7 @@ tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
   b.setTitle("Tambah berkas baru")
   b.setView(scroll)
   b.setPositiveButton("simpan berkas", DialogInterface.OnClickListener{
-    onClick = function(dialog, which)
+    onClick = function()
       local repo = tostring(inputRepo.getText()):match("^%s*(.-)%s*$")
       local path = tostring(inputPath.getText()):match("^%s*(.-)%s*$")
       local konten = tostring(inputKonten.getText())
@@ -888,7 +963,7 @@ tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
 
       local kontenBase64 = Base64.encodeToString(String(konten).getBytes("UTF-8"), Base64.NO_WRAP)
       local payload = JSONObject()
-      payload.put("message", "Menambahkan berkas " .. path)
+      payload.put("message", "Tambah " .. path)
       payload.put("content", kontenBase64)
 
       local endpoint = "https://api.github.com/repos/" .. repo .. "/contents/" .. path
@@ -900,13 +975,13 @@ tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
           local rawUrl = contentObj and contentObj.optString("download_url", "") or ""
           
           local d = AlertDialog.Builder(service)
-          d.setTitle("Berkas berhasil ditambahkan")
-          d.setMessage("Berkas: " .. path .. "\n\nTautan raw (updater):\n" .. rawUrl .. "\n\nTautan halaman:\n" .. fileUrl)
+          d.setTitle("Berkas ditambahkan")
+          d.setMessage("Nama: " .. path .. "\n\nTautan raw:\n" .. rawUrl .. "\n\nTautan web:\n" .. fileUrl)
           d.setPositiveButton("salin tautan raw", DialogInterface.OnClickListener{
-            onClick = function() salinKeClipboard("Tautan raw updater", rawUrl) end
+            onClick = function() salinKeClipboard("Tautan raw", rawUrl) end
           })
           d.setNeutralButton("bagikan", DialogInterface.OnClickListener{
-            onClick = function() bagikanTautan("Tautan berkas: " .. path, rawUrl) end
+            onClick = function() bagikanTautan("Berkas: " .. path, rawUrl) end
           })
           d.setNegativeButton("kembali", DialogInterface.OnClickListener{
             onClick = function()
@@ -945,9 +1020,8 @@ tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
 end
 
 -- ==========================================================
--- MENU UTAMA & PENYIMPANAN TOKEN
+-- 10. MENU UTAMA & LOGIN
 -- ==========================================================
-
 menuUtama = function()
   local token = prefs.getString(KEY_TOKEN, "")
   if token == "" then
@@ -961,15 +1035,15 @@ menuUtama = function()
   end
 
   local menuItems = {
-    "1. Daftar dan kelola repositori saya (buka repo, berkas & tautan)",
+    "1. Repositori saya",
     "2. Buat repositori baru",
-    "3. Buka halaman buat token di web",
-    "4. Ganti akun / keluar (hapus token)",
+    "3. Buat token di web",
+    "4. Keluar akun",
     "5. Periksa versi baru"
   }
 
   local b = AlertDialog.Builder(service)
-  b.setTitle("Pengelola GitHub pribadi")
+  b.setTitle("Pengelola GitHub by novan")
   b.setItems(menuItems, DialogInterface.OnClickListener{
     onClick = function(dialog, which)
       if which == 0 then
@@ -980,8 +1054,8 @@ menuUtama = function()
         bukaBrowser(URL_GENERATE_TOKEN)
       elseif which == 3 then
         prefs.edit().remove(KEY_TOKEN).apply()
-        if service.speak then service.speak("Token dihapus. Anda telah keluar.") end
-        Toast.makeText(service, "Token dihapus dari perangkat.", Toast.LENGTH_SHORT).show()
+        if service.speak then service.speak("Token dihapus. Anda keluar.") end
+        Toast.makeText(service, "Anda telah keluar.", Toast.LENGTH_SHORT).show()
       elseif which == 4 then
         cekPembaruan(true)
       end
@@ -1000,7 +1074,7 @@ tampilkanDialogLogin = function()
   layout.setPadding(40, 20, 40, 10)
 
   local input = EditText(service)
-  input.setHint("Tempel token GitHub di sini")
+  input.setHint("Tempel token di sini")
   input.setSingleLine(true)
   layout.addView(input)
 
@@ -1010,7 +1084,7 @@ tampilkanDialogLogin = function()
 
   local b = AlertDialog.Builder(service)
   b.setTitle("Masuk akun GitHub")
-  b.setMessage("Masukkan personal access token Anda. Jika belum memiliki token, tekan tombol 'Dapatkan token di web' di bawah:")
+  b.setMessage("Masukkan token GitHub Anda. Jika belum punya, tekan 'dapatkan token di web':")
   b.setView(scroll)
 
   b.setPositiveButton("simpan token", DialogInterface.OnClickListener{
@@ -1021,15 +1095,13 @@ tampilkanDialogLogin = function()
         return
       end
       prefs.edit().putString(KEY_TOKEN, t).apply()
-      if service.speak then service.speak("Token berhasil disimpan.") end
+      if service.speak then service.speak("Token disimpan.") end
       menuUtama()
     end
   })
 
   b.setNeutralButton("dapatkan token di web", DialogInterface.OnClickListener{
-    onClick = function()
-      bukaBrowser(URL_GENERATE_TOKEN)
-    end
+    onClick = function() bukaBrowser(URL_GENERATE_TOKEN) end
   })
 
   b.setNegativeButton("tutup", nil)
