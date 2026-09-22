@@ -17,7 +17,7 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
--- Pengaturan Versi & Tautan Skrip Pembaruan (Dinaikkan ke versi 1.3)
+-- Pengaturan Versi & Tautan Skrip Pembaruan (Versi 1.3)
 local VERSI_SAAT_INI = "1.3"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
@@ -34,7 +34,7 @@ local sudahCekOtomatis = false
 
 -- Deklarasi fungsi navigasi bertingkat
 local menuUtama, tampilkanDialogLogin
-local buatRepoDialog, tambahFileRepoDialog, unggahDariMemoriHPDialog
+local buatRepoDialog, tambahFileRepoDialog, unggahDariMemoriHPDialog, konfirmUnggahBerkasDialog
 local daftarRepoSayaDialog, cariRepoDialog, kelolaRepoPilihanDialog, ubahPrivasiRepoDialog
 local bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog, hapusRepoDialog
 local cekPembaruan, prosesDownloadPembaruan, aktifkanGitHubPagesOtomatis
@@ -414,7 +414,7 @@ aktifkanGitHubPagesOtomatis = function(fullName, branchName, token, callback)
 end
 
 -- ==========================================================
--- 1. DAFTAR & PENCARIAN REPOSITORI (PENGURUTAN LATAR BELAKANG)
+-- 1. DAFTAR & PENCARIAN REPOSITORI (PENGURUTAN TERAKHIR DIEDIT)
 -- ==========================================================
 daftarRepoSayaDialog = function(token)
   local endpoint = "https://api.github.com/user/repos?sort=updated&direction=desc&per_page=100&affiliation=owner"
@@ -424,68 +424,60 @@ daftarRepoSayaDialog = function(token)
       return
     end
 
-    Thread(Runnable{
-      run = function()
-        local okProses, hasilData = pcall(function()
-          local arr = JSONArray(res)
-          local total = arr.length()
-          local repoDataList = {}
-          for i = 0, total - 1 do
-            table.insert(repoDataList, arr.getJSONObject(i))
-          end
-
-          table.sort(repoDataList, function(a, b)
-            return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
-          end)
-
-          local listItems = {}
-          for i, item in ipairs(repoDataList) do
-            local nama = item.optString("name", "")
-            local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
-            table.insert(listItems, string.format("%d. %s %s", i, nama, status))
-          end
-
-          return {list = listItems, data = repoDataList}
-        end)
-
-        mainHandler.post(Runnable{
-          run = function()
-            if not okProses or not hasilData then
-              Toast.makeText(service, "Gagal memproses repositori.", Toast.LENGTH_SHORT).show()
-              return
-            end
-
-            local listItems = hasilData.list
-            local repoDataList = hasilData.data
-            local total = #repoDataList
-
-            if total == 0 then
-              if service.speak then service.speak("Belum ada repositori.") end
-              Toast.makeText(service, "Belum ada repositori.", Toast.LENGTH_SHORT).show()
-              menuUtama()
-              return
-            end
-
-            if service.speak then service.speak("Ditemukan " .. total .. " repositori.") end
-
-            local b = AlertDialog.Builder(service)
-            b.setTitle("Repositori saya (" .. total .. ")")
-            b.setItems(listItems, DialogInterface.OnClickListener{
-              onClick = function(dialog, which)
-                kelolaRepoPilihanDialog(repoDataList[which + 1], token)
-              end
-            })
-            b.setNegativeButton("kembali", DialogInterface.OnClickListener{
-              onClick = function() menuUtama() end
-            })
-            local diag = b.create()
-            diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-            diag.show()
-            aturTombolHurufKecil(diag, nil, "kembali", nil)
-          end
-        })
+    local okProses, hasilData = pcall(function()
+      local arr = JSONArray(res)
+      local total = arr.length()
+      local repoDataList = {}
+      for i = 0, total - 1 do
+        table.insert(repoDataList, arr.getJSONObject(i))
       end
-    }).start()
+
+      table.sort(repoDataList, function(a, b)
+        return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
+      end)
+
+      local listItems = {}
+      for i, item in ipairs(repoDataList) do
+        local nama = item.optString("name", "")
+        local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
+        table.insert(listItems, string.format("%d. %s %s", i, nama, status))
+      end
+
+      return {list = listItems, data = repoDataList}
+    end)
+
+    if not okProses or not hasilData then
+      Toast.makeText(service, "Gagal memproses repositori.", Toast.LENGTH_SHORT).show()
+      return
+    end
+
+    local listItems = hasilData.list
+    local repoDataList = hasilData.data
+    local total = #repoDataList
+
+    if total == 0 then
+      if service.speak then service.speak("Belum ada repositori.") end
+      Toast.makeText(service, "Belum ada repositori.", Toast.LENGTH_SHORT).show()
+      menuUtama()
+      return
+    end
+
+    if service.speak then service.speak("Ditemukan " .. total .. " repositori.") end
+
+    local b = AlertDialog.Builder(service)
+    b.setTitle("Repositori saya (" .. total .. ")")
+    b.setItems(listItems, DialogInterface.OnClickListener{
+      onClick = function(dialog, which)
+        kelolaRepoPilihanDialog(repoDataList[which + 1], token)
+      end
+    })
+    b.setNegativeButton("kembali", DialogInterface.OnClickListener{
+      onClick = function() menuUtama() end
+    })
+    local diag = b.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.show()
+    aturTombolHurufKecil(diag, nil, "kembali", nil)
   end)
 end
 
@@ -524,67 +516,59 @@ cariRepoDialog = function(token)
           return
         end
 
-        Thread(Runnable{
-          run = function()
-            local okFilter, hasilFilter = pcall(function()
-              local arr = JSONArray(res)
-              local total = arr.length()
-              local hasilData = {}
+        local okFilter, hasilFilter = pcall(function()
+          local arr = JSONArray(res)
+          local total = arr.length()
+          local hasilData = {}
 
-              for i = 0, total - 1 do
-                local item = arr.getJSONObject(i)
-                local nama = item.optString("name", "")
-                if nama:lower():find(query, 1, true) then
-                  table.insert(hasilData, item)
-                end
-              end
-
-              table.sort(hasilData, function(a, b)
-                return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
-              end)
-
-              local hasilItems = {}
-              for i, item in ipairs(hasilData) do
-                local nama = item.optString("name", "")
-                local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
-                table.insert(hasilItems, string.format("%d. %s %s", i, nama, status))
-              end
-
-              return {list = hasilItems, data = hasilData}
-            end)
-
-            mainHandler.post(Runnable{
-              run = function()
-                if not okFilter or not hasilFilter or #hasilFilter.data == 0 then
-                  if service.speak then service.speak("Tidak ada repositori yang cocok.") end
-                  Toast.makeText(service, "Repositori tidak ditemukan.", Toast.LENGTH_SHORT).show()
-                  cariRepoDialog(token)
-                  return
-                end
-
-                local hasilItems = hasilFilter.list
-                local hasilData = hasilFilter.data
-
-                if service.speak then service.speak("Ditemukan " .. #hasilItems .. " repositori cocok.") end
-
-                local resB = AlertDialog.Builder(service)
-                resB.setTitle("Hasil pencarian (" .. #hasilItems .. ")")
-                resB.setItems(hasilItems, DialogInterface.OnClickListener{
-                  onClick = function(dRes, whichRes)
-                    kelolaRepoPilihanDialog(hasilData[whichRes + 1], token)
-                  end
-                })
-                resB.setNegativeButton("kembali", DialogInterface.OnClickListener{
-                  onClick = function() cariRepoDialog(token) end
-                })
-                local dHasil = resB.create()
-                dHasil.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-                dHasil.show()
-                aturTombolHurufKecil(dHasil, nil, "kembali", nil)
-              end
-            })
+          for i = 0, total - 1 do
+            local item = arr.getJSONObject(i)
+            local nama = item.optString("name", "")
+            if nama:lower():find(query, 1, true) then
+              table.insert(hasilData, item)
+            end
           end
-        }).start()
+
+          table.sort(hasilData, function(a, b)
+            return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
+          end)
+
+          local hasilItems = {}
+          for i, item in ipairs(hasilData) do
+            local nama = item.optString("name", "")
+            local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
+            table.insert(hasilItems, string.format("%d. %s %s", i, nama, status))
+          end
+
+          return {list = hasilItems, data = hasilData}
+        end)
+
+        if not okFilter or not hasilFilter or #hasilFilter.data == 0 then
+          if service.speak then service.speak("Tidak ada repositori yang cocok.") end
+          Toast.makeText(service, "Repositori tidak ditemukan.", Toast.LENGTH_SHORT).show()
+          cariRepoDialog(token)
+          return
+        end
+
+        local hasilItems = hasilFilter.list
+        local hasilData = hasilFilter.data
+
+        if service.speak then service.speak("Ditemukan " .. #hasilItems .. " repositori cocok.") end
+
+        local resB = AlertDialog.Builder(service)
+        resB.setTitle("Hasil pencarian (" .. #hasilItems .. ")")
+        resB.setItems(hasilItems, DialogInterface.OnClickListener{
+          onClick = function(dRes, whichRes)
+            kelolaRepoPilihanDialog(hasilData[whichRes + 1], token)
+          end
+        })
+        resB.setNegativeButton("kembali", DialogInterface.OnClickListener{
+          onClick = function() cariRepoDialog(token) end
+        })
+        local dHasil = resB.create()
+        dHasil.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+        dHasil.show()
+        aturTombolHurufKecil(dHasil, nil, "kembali", nil)
       end)
     end
   })
@@ -698,6 +682,86 @@ end
 -- ==========================================================
 -- 4. UNGGAH BERKAS DARI MEMORI HP (FILE PICKER)
 -- ==========================================================
+konfirmUnggahBerkasDialog = function(fullName, token, repoObj, pathSekarang, terpilih)
+  local layoutKonfirm = LinearLayout(service)
+  layoutKonfirm.setOrientation(LinearLayout.VERTICAL)
+  layoutKonfirm.setPadding(40, 20, 40, 10)
+
+  local lblTarget = TextView(service)
+  lblTarget.setText("Nama berkas di GitHub:")
+  layoutKonfirm.addView(lblTarget)
+
+  local inputNamaRepo = EditText(service)
+  inputNamaRepo.setText(terpilih.getName())
+  inputNamaRepo.setSingleLine(true)
+  layoutKonfirm.addView(inputNamaRepo)
+
+  local scrollK = ScrollView(service)
+  scrollK.setFillViewport(true)
+  scrollK.addView(layoutKonfirm)
+
+  local dKonfirm = AlertDialog.Builder(service)
+  dKonfirm.setTitle("Unggah berkas terpilih")
+  dKonfirm.setMessage("Ukuran berkas: " .. formatUkuranBerkas(terpilih.length()))
+  dKonfirm.setView(scrollK)
+  dKonfirm.setPositiveButton("unggah berkas", DialogInterface.OnClickListener{
+    onClick = function()
+      local namaDiRepo = tostring(inputNamaRepo.getText()):match("^%s*(.-)%s*$")
+      if namaDiRepo == "" then namaDiRepo = terpilih.getName() end
+
+      local okB64, b64Data = pcall(function() return bacaBerkasKeBase64(terpilih) end)
+      if not okB64 then
+        Toast.makeText(service, "Gagal membaca berkas: " .. tostring(b64Data), Toast.LENGTH_SHORT).show()
+        return
+      end
+
+      local payload = JSONObject()
+      payload.put("message", "Unggah " .. namaDiRepo .. " dari HP")
+      payload.put("content", b64Data)
+
+      local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. namaDiRepo
+      kirimPermintaanGitHub("PUT", endpoint, token, payload.toString(), function(sukses, resPut)
+        if sukses then
+          local objRes = JSONObject(resPut)
+          local contentObj = objRes.optJSONObject("content")
+          local rawUrl = contentObj and contentObj.optString("download_url", "") or ""
+          local htmlUrl = contentObj and contentObj.optString("html_url", "") or ""
+
+          local dSukses = AlertDialog.Builder(service)
+          dSukses.setTitle("Berkas berhasil diunggah")
+          dSukses.setMessage("Berkas: " .. namaDiRepo .. "\n\nTautan raw:\n" .. rawUrl .. "\n\nTautan web:\n" .. htmlUrl)
+          dSukses.setPositiveButton("salin tautan raw", DialogInterface.OnClickListener{
+            onClick = function() salinKeClipboard("Tautan raw", rawUrl) end
+          })
+          dSukses.setNeutralButton("bagikan", DialogInterface.OnClickListener{
+            onClick = function() bagikanTautan("Berkas: " .. namaDiRepo, rawUrl) end
+          })
+          dSukses.setNegativeButton("kembali", DialogInterface.OnClickListener{
+            onClick = function() kelolaRepoPilihanDialog(repoObj, token) end
+          })
+          local dS = dSukses.create()
+          dS.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+          dS.show()
+          aturTombolHurufKecil(dS, "salin tautan raw", "kembali", "bagikan")
+        else
+          Toast.makeText(service, "Gagal unggah: " .. tostring(resPut), Toast.LENGTH_LONG).show()
+          kelolaRepoPilihanDialog(repoObj, token)
+        end
+      end)
+    end
+  })
+  dKonfirm.setNegativeButton("kembali", DialogInterface.OnClickListener{
+    onClick = function()
+      unggahDariMemoriHPDialog(fullName, token, repoObj, pathSekarang)
+    end
+  })
+  local dK = dKonfirm.create()
+  dK.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+  dK.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+  dK.show()
+  aturTombolHurufKecil(dK, "unggah berkas", "kembali", nil)
+end
+
 unggahDariMemoriHPDialog = function(fullName, token, repoObj, pathSekarang)
   local dir = File(pathSekarang)
   local files = dir.listFiles()
@@ -754,88 +818,10 @@ unggahDariMemoriHPDialog = function(fullName, token, repoObj, pathSekarang)
         elseif item.tipe == "dir" then
           unggahDariMemoriHPDialog(fullName, token, repoObj, item.file.getAbsolutePath())
         elseif item.tipe == "file" then
-          local terpilih = item.file
-
-          local layoutKonfirm = LinearLayout(service)
-          layoutKonfirm.setOrientation(LinearLayout.VERTICAL)
-          layoutKonfirm.setPadding(40, 20, 40, 10)
-
-          local lblTarget = TextView(service)
-          lblTarget.setText("Nama berkas di GitHub:")
-          layoutKonfirm.addView(lblTarget)
-
-          local inputNamaRepo = EditText(service)
-          inputNamaRepo.setText(terpilih.getName())
-          inputNamaRepo.setSingleLine(true)
-          layoutKonfirm.addView(inputNamaRepo)
-
-          local scrollK = ScrollView(service)
-          scrollK.setFillViewport(true)
-          scrollK.addView(layoutKonfirm)
-
-          local dKonfirm = AlertDialog.Builder(service)
-          dKonfirm.setTitle("Unggah berkas terpilih")
-          dKonfirm.setMessage("Ukuran berkas: " .. formatUkuranBerkas(terpilih.length()))
-          dKonfirm.setView(scrollK)
-          dKonfirm.setPositiveButton("unggah berkas", DialogInterface.OnClickListener{
-            onClick = function()
-              local namaDiRepo = tostring(inputNamaRepo.getText()):match("^%s*(.-)%s*$")
-              if namaDiRepo == "" then namaDiRepo = terpilih.getName() end
-
-              local okB64, b64Data = pcall(function() return bacaBerkasKeBase64(terpilih) end)
-              if not okB64 then
-                Toast.makeText(service, "Gagal membaca berkas: " .. tostring(b64Data), Toast.LENGTH_SHORT).show()
-                return
-              end
-
-              local payload = JSONObject()
-              payload.put("message", "Unggah " .. namaDiRepo .. " dari HP")
-              payload.put("content", b64Data)
-
-              local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. namaDiRepo
-              kirimPermintaanGitHub("PUT", endpoint, token, payload.toString(), function(sukses, resPut)
-                if sukses then
-                  local objRes = JSONObject(resPut)
-                  local contentObj = objRes.optJSONObject("content")
-                  local rawUrl = contentObj and contentObj.optString("download_url", "") or ""
-                  local htmlUrl = contentObj and contentObj.optString("html_url", "") or ""
-
-                  local dSukses = AlertDialog.Builder(service)
-                  dSukses.setTitle("Berkas berhasil diunggah")
-                  dSukses.setMessage("Berkas: " .. namaDiRepo .. "\n\nTautan raw:\n" .. rawUrl .. "\n\nTautan web:\n" .. htmlUrl)
-                  dSukses.setPositiveButton("salin tautan raw", DialogInterface.OnClickListener{
-                    onClick = function() salinKeClipboard("Tautan raw", rawUrl) end
-                  })
-                  dSukses.setNeutralButton("bagikan", DialogInterface.OnClickListener{
-                    onClick = function() bagikanTautan("Berkas: " .. namaDiRepo, rawUrl) end
-                  })
-                  dSukses.setNegativeButton("kembali", DialogInterface.OnClickListener{
-                    onClick = function() kelolaRepoPilihanDialog(repoObj, token) end
-                  })
-                  local dS = dSukses.create()
-                  dS.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-                  dS.show()
-                  aturTombolHurufKecil(dS, "salin tautan raw", "kembali", "bagikan")
-                else
-                  Toast.makeText(service, "Gagal unggah: " .. tostring(resPut), Toast.LENGTH_LONG).show()
-                  kelolaRepoPilihanDialog(repoObj, token)
-                end
-              end)
-            end
-          })
-          dKonfirm.setNegativeButton("kembali", DialogInterface.OnClickListener{
-            onClick = function()
-              unggahDariMemoriHPDialog(fullName, token, repoObj, pathSekarang)
-            end
-          })
-          local dK = dKonfirm.create()
-          dK.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-          dK.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-          dK.show()
-          aturTombolHurufKecil(dK, "unggah berkas", "kembali", nil)
+          konfirmUnggahBerkasDialog(fullName, token, repoObj, pathSekarang, item.file)
         end
-      end)
-    end
+      end
+    })
   end
 
   b.setNegativeButton("kembali", DialogInterface.OnClickListener{
@@ -1400,7 +1386,7 @@ menuUtama = function()
     return
   end
 
-  -- Beri jeda 3 detik untuk cek update otomatis agar tidak macet/bentrok saat membuka menu
+  -- Jeda 3 detik agar cek update tidak bentrok koneksi saat menu baru dibuka
   if not sudahCekOtomatis then
     sudahCekOtomatis = true
     mainHandler.postDelayed(Runnable{
