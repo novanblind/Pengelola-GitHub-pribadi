@@ -17,8 +17,8 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
--- Pengaturan Versi & Tautan Skrip Pembaruan (Versi 1.3)
-local VERSI_SAAT_INI = "1.3"
+-- Pengaturan Versi & Tautan Skrip Pembaruan (Dinaikkan ke versi 1.4)
+local VERSI_SAAT_INI = "1.4"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pembaruan otomatis
@@ -36,7 +36,7 @@ local sudahCekOtomatis = false
 local menuUtama, tampilkanDialogLogin
 local buatRepoDialog, tambahFileRepoDialog, unggahDariMemoriHPDialog, konfirmUnggahBerkasDialog
 local daftarRepoSayaDialog, cariRepoDialog, kelolaRepoPilihanDialog, ubahPrivasiRepoDialog
-local bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog, hapusRepoDialog
+local bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog, gantiNamaBerkasDialog, hapusRepoDialog
 local cekPembaruan, prosesDownloadPembaruan, aktifkanGitHubPagesOtomatis
 
 -- Tautan otomatis pembuatan token dengan izin repo dan delete_repo
@@ -578,7 +578,6 @@ cariRepoDialog = function(token)
 
   local diag = b.create()
   diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
-  diag.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
   diag.show()
   aturTombolHurufKecil(diag, "cari", "kembali", nil)
 end
@@ -937,7 +936,98 @@ gantiNamaRepoDialog = function(repoObj, token)
 end
 
 -- ==========================================================
--- 7. PENJELAJAH BERKAS & FOLDER
+-- 7. GANTI NAMA BERKAS (BARU DI V1.4)
+-- ==========================================================
+gantiNamaBerkasDialog = function(fullName, fileData, token, currentPath, repoObj)
+  local namaLama = fileData.name
+  local layout = LinearLayout(service)
+  layout.setOrientation(LinearLayout.VERTICAL)
+  layout.setPadding(40, 20, 40, 10)
+
+  local lbl = TextView(service)
+  lbl.setText("Nama baru berkas:")
+  layout.addView(lbl)
+
+  local input = EditText(service)
+  input.setText(namaLama)
+  input.setSingleLine(true)
+  layout.addView(input)
+
+  local scroll = ScrollView(service)
+  scroll.setFillViewport(true)
+  scroll.addView(layout)
+
+  local b = AlertDialog.Builder(service)
+  b.setTitle("Ganti nama: " .. namaLama)
+  b.setView(scroll)
+  b.setPositiveButton("simpan nama baru", DialogInterface.OnClickListener{
+    onClick = function()
+      local namaBaru = tostring(input.getText()):match("^%s*(.-)%s*$")
+      if namaBaru == "" or namaBaru == namaLama then
+        menuAksiFile(fullName, fileData, token, currentPath, repoObj)
+        return
+      end
+
+      local jalurBaru = (currentPath == "") and namaBaru or (currentPath .. "/" .. namaBaru)
+      local endpointAmbil = "https://api.github.com/repos/" .. fullName .. "/contents/" .. fileData.path
+
+      kirimPermintaanGitHub("GET", endpointAmbil, token, nil, function(okGet, resGet)
+        if not okGet then
+          Toast.makeText(service, "Gagal mengambil berkas: " .. tostring(resGet), Toast.LENGTH_LONG).show()
+          menuAksiFile(fullName, fileData, token, currentPath, repoObj)
+          return
+        end
+
+        local objGet = JSONObject(resGet)
+        local shaLama = objGet.optString("sha", fileData.sha)
+        local contentBase64 = objGet.optString("content", ""):gsub("%s+", "")
+
+        local endpointBaru = "https://api.github.com/repos/" .. fullName .. "/contents/" .. jalurBaru
+        local payloadBaru = JSONObject()
+        payloadBaru.put("message", "Ganti nama " .. namaLama .. " menjadi " .. namaBaru)
+        payloadBaru.put("content", contentBase64)
+
+        kirimPermintaanGitHub("PUT", endpointBaru, token, payloadBaru.toString(), function(okPut, resPut)
+          if not okPut then
+            Toast.makeText(service, "Gagal membuat berkas baru: " .. tostring(resPut), Toast.LENGTH_LONG).show()
+            menuAksiFile(fullName, fileData, token, currentPath, repoObj)
+            return
+          end
+
+          local endpointHapus = "https://api.github.com/repos/" .. fullName .. "/contents/" .. fileData.path
+          local payloadHapus = JSONObject()
+          payloadHapus.put("message", "Hapus berkas lama setelah ganti nama")
+          payloadHapus.put("sha", shaLama)
+
+          kirimPermintaanGitHub("DELETE", endpointHapus, token, payloadHapus.toString(), function(okDel, resDel)
+            if okDel then
+              if service.speak then service.speak("Nama berkas berhasil diubah menjadi " .. namaBaru) end
+              Toast.makeText(service, "Nama berkas diperbarui!", Toast.LENGTH_SHORT).show()
+              bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj)
+            else
+              Toast.makeText(service, "Gagal menghapus berkas lama: " .. tostring(resDel), Toast.LENGTH_LONG).show()
+              bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj)
+            end
+          end)
+        end)
+      end)
+    end
+  })
+  b.setNegativeButton("kembali", DialogInterface.OnClickListener{
+    onClick = function()
+      menuAksiFile(fullName, fileData, token, currentPath, repoObj)
+    end
+  })
+
+  local diag = b.create()
+  diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+  diag.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+  diag.show()
+  aturTombolHurufKecil(diag, "simpan nama baru", "kembali", nil)
+end
+
+-- ==========================================================
+-- 8. PENJELAJAH BERKAS & FOLDER
 -- ==========================================================
 bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
   local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. currentPath
@@ -1015,15 +1105,16 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
 end
 
 -- ==========================================================
--- 8. MENU AKSI BERKAS SPESIFIK
+-- 9. MENU AKSI BERKAS SPESIFIK
 -- ==========================================================
 menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
   local opsiFile = {
     "1. Salin tautan raw (updater)",
-    "2. Edit berkas",
-    "3. Salin tautan web",
-    "4. Bagikan tautan raw",
-    "5. Hapus berkas"
+    "2. Edit isi berkas",
+    "3. Ganti nama berkas",
+    "4. Salin tautan web",
+    "5. Bagikan tautan raw",
+    "6. Hapus berkas"
   }
 
   local b = AlertDialog.Builder(service)
@@ -1052,10 +1143,12 @@ menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
           end
         end)
       elseif which == 2 then
-        salinKeClipboard("Tautan web", fileData.html_url)
+        gantiNamaBerkasDialog(fullName, fileData, token, currentPath, repoObj)
       elseif which == 3 then
-        bagikanTautan("Berkas raw: " .. fileData.name, fileData.download_url)
+        salinKeClipboard("Tautan web", fileData.html_url)
       elseif which == 4 then
+        bagikanTautan("Berkas raw: " .. fileData.name, fileData.download_url)
+      elseif which == 5 then
         local konfirm = AlertDialog.Builder(service)
         konfirm.setTitle("Hapus berkas?")
         konfirm.setMessage("Hapus " .. fileData.name .. " dari repositori?")
@@ -1097,7 +1190,7 @@ menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
 end
 
 -- ==========================================================
--- 9. EDITOR TEKS BERKAS
+-- 10. EDITOR TEKS BERKAS
 -- ==========================================================
 formEditIsiBerkas = function(repo, path, sha, isiAwal, token, onSuccess, onBatal)
   local layout = LinearLayout(service)
@@ -1152,7 +1245,7 @@ formEditIsiBerkas = function(repo, path, sha, isiAwal, token, onSuccess, onBatal
 end
 
 -- ==========================================================
--- 10. PEMBUATAN REPOSITORI BARU
+-- 11. PEMBUATAN REPOSITORI BARU
 -- ==========================================================
 buatRepoDialog = function(token)
   local layout = LinearLayout(service)
@@ -1261,7 +1354,7 @@ buatRepoDialog = function(token)
 end
 
 -- ==========================================================
--- 11. TAMBAH BERKAS BARU (KETIK MANUAL)
+-- 12. TAMBAH BERKAS BARU (KETIK MANUAL)
 -- ==========================================================
 tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
   local layout = LinearLayout(service)
@@ -1377,7 +1470,7 @@ tambahFileRepoDialog = function(token, repoOtomatis, repoObj)
 end
 
 -- ==========================================================
--- 12. MENU UTAMA & LOGIN
+-- 13. MENU UTAMA & LOGIN
 -- ==========================================================
 menuUtama = function()
   local token = prefs.getString(KEY_TOKEN, "")
@@ -1386,7 +1479,6 @@ menuUtama = function()
     return
   end
 
-  -- Jeda 3 detik agar cek update tidak bentrok koneksi saat menu baru dibuka
   if not sudahCekOtomatis then
     sudahCekOtomatis = true
     mainHandler.postDelayed(Runnable{
