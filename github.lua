@@ -17,8 +17,8 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
--- Pengaturan Versi & Tautan Skrip Pembaruan (Tetap versi 1.2)
-local VERSI_SAAT_INI = "1.2"
+-- Pengaturan Versi & Tautan Skrip Pembaruan (Dinaikkan ke versi 1.3)
+local VERSI_SAAT_INI = "1.3"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pembaruan otomatis
@@ -424,20 +424,16 @@ daftarRepoSayaDialog = function(token)
       return
     end
 
-    -- Pindahkan proses JSON dan pengurutan ke latar belakang agar UI dan kursor tetap halus
     Thread(Runnable{
       run = function()
         local okProses, hasilData = pcall(function()
           local arr = JSONArray(res)
           local total = arr.length()
-          if total == 0 then return {}, {} end
-
           local repoDataList = {}
           for i = 0, total - 1 do
             table.insert(repoDataList, arr.getJSONObject(i))
           end
 
-          -- Urutkan repositori: yang terakhir diedit tampil paling atas
           table.sort(repoDataList, function(a, b)
             return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
           end)
@@ -1273,6 +1269,7 @@ buatRepoDialog = function(token)
 
   local diag = b.create()
   diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+  diag.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
   diag.show()
   aturTombolHurufKecil(diag, "buat repositori", "kembali", nil)
 end
