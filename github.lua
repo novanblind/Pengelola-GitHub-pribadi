@@ -20,7 +20,7 @@ local mainHandler = Handler(Looper.getMainLooper())
 -- ==========================================================
 -- PENGATURAN VERSI & TAUTAN SKRIP PEMBARUAN
 -- ==========================================================
-local VERSI_SAAT_INI = "1.6"
+local VERSI_SAAT_INI = "1.7"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pembaruan otomatis
@@ -46,6 +46,8 @@ local jalankanOperasiBanyakRepo, prosesHapusBanyakRepo, prosesUbahPrivasiBanyakR
 
 -- Tautan otomatis pembuatan token dengan izin repo dan delete_repo
 local URL_GENERATE_TOKEN = "https://github.com/settings/tokens/new?description=Aksesibilitas+Android&scopes=repo,delete_repo"
+-- Tautan halaman pendaftaran akun GitHub baru
+local URL_DAFTAR_AKUN = "https://github.com/signup"
 
 -- ==========================================================
 -- FUNGSI UTILITAS UMUM
@@ -1853,7 +1855,7 @@ tampilkanDialogLogin = function()
 
     local b = AlertDialog.Builder(service)
     b.setTitle("Masuk akun GitHub")
-    b.setMessage("Masukkan token GitHub Anda. Jika belum punya, tekan 'dapatkan token di web':")
+    b.setMessage("Masukkan token GitHub Anda. Belum punya token atau akun? Gunakan tombol di bawah:")
     b.setView(scroll)
 
     b.setPositiveButton("simpan token", DialogInterface.OnClickListener{
@@ -1873,13 +1875,15 @@ tampilkanDialogLogin = function()
         onClick = function() bukaBrowser(URL_GENERATE_TOKEN) end
     })
 
-    b.setNegativeButton("tutup", nil)
+    b.setNegativeButton("buat akun baru", DialogInterface.OnClickListener{
+        onClick = function() bukaBrowser(URL_DAFTAR_AKUN) end
+    })
 
     local diag = b.create()
     diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
     diag.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
     diag.show()
-    aturTombolHurufKecil(diag, "simpan token", "tutup", "dapatkan token di web")
+    aturTombolHurufKecil(diag, "simpan token", "buat akun baru", "dapatkan token di web")
 end
 
 menuUtama()
