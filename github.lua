@@ -20,7 +20,7 @@ local mainHandler = Handler(Looper.getMainLooper())
 -- ==========================================================
 -- PENGATURAN VERSI & TAUTAN SKRIP PEMBARUAN
 -- ==========================================================
-local VERSI_SAAT_INI = "1.7"
+local VERSI_SAAT_INI = "1.8"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pembaruan otomatis
@@ -630,9 +630,9 @@ multiSelectRepoDialog = function(token, repoDataList, filterAktif, terpilihMap)
         local nama = item.optString("name", "")
         local fullName = item.optString("full_name", "")
         local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
-        local tanda = terpilihMap[fullName] and "[x] " or "[ ] "
+        local keteranganCentang = terpilihMap[fullName] and "dicentang" or "tidak dicentang"
         if terpilihMap[fullName] then jumlahTerpilih = jumlahTerpilih + 1 end
-        table.insert(items, tanda .. nama .. " " .. status)
+        table.insert(items, nama .. " " .. status .. ", " .. keteranganCentang)
     end
 
     local b = AlertDialog.Builder(service)
@@ -640,8 +640,18 @@ multiSelectRepoDialog = function(token, repoDataList, filterAktif, terpilihMap)
     b.setItems(items, DialogInterface.OnClickListener{
         onClick = function(dialog, which)
             local item = repoDataList[which + 1]
+            local nama = item.optString("name", "")
             local fullName = item.optString("full_name", "")
             terpilihMap[fullName] = not terpilihMap[fullName]
+
+            if service.speak then
+                if terpilihMap[fullName] then
+                    service.speak(nama .. " dicentang")
+                else
+                    service.speak(nama .. " tidak dicentang")
+                end
+            end
+
             multiSelectRepoDialog(token, repoDataList, filterAktif, terpilihMap)
         end
     })
