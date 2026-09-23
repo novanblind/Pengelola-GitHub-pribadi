@@ -20,7 +20,7 @@ local mainHandler = Handler(Looper.getMainLooper())
 -- ==========================================================
 -- PENGATURAN VERSI & TAUTAN SKRIP PEMBARUAN
 -- ==========================================================
-local VERSI_SAAT_INI = "1.5"
+local VERSI_SAAT_INI = "1.6"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pembaruan otomatis
@@ -41,6 +41,8 @@ local buatRepoDialog, tambahFileRepoDialog, unggahDariMemoriHPDialog, konfirmUng
 local daftarRepoSayaDialog, cariRepoDialog, kelolaRepoPilihanDialog, ubahPrivasiRepoDialog
 local bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog, gantiNamaBerkasDialog, hapusRepoDialog
 local cekPembaruan, prosesDownloadPembaruan, aktifkanGitHubPagesOtomatis
+local filterRepoDialog, multiSelectRepoDialog
+local jalankanOperasiBanyakRepo, prosesHapusBanyakRepo, prosesUbahPrivasiBanyakRepo, tampilkanHasilOperasiBanyak
 
 -- Tautan otomatis pembuatan token dengan izin repo dan delete_repo
 local URL_GENERATE_TOKEN = "https://github.com/settings/tokens/new?description=Aksesibilitas+Android&scopes=repo,delete_repo"
@@ -185,8 +187,21 @@ local function bagikanTautan(judul, teks)
 end
 
 -- ==========================================================
--- PERMINTAAN HTTP KE GITHUB API
+-- PERMINTAAN HTTP KE GITHUB API (dengan retry otomatis saat gagal jaringan)
 -- ==========================================================
+local MAX_PERCOBAAN_JARINGAN = 3
+local JEDA_DASAR_RETRY_MS = 1200
+
+-- Menentukan apakah suatu error berasal dari respons server yang valid (logis, mis. 403/404 -> jangan diulang)
+-- atau dari masalah koneksi/jaringan (timeout, host tidak ditemukan, koneksi putus -> boleh dicoba ulang otomatis)
+local function apakahErrorJaringan(pesanError)
+    local p = tostring(pesanError)
+    if p:find("Gagal%. Kode:") then
+        return false
+    end
+    return true
+end
+
 local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesai, diam)
     local progress
     if not diam then
@@ -198,79 +213,108 @@ local function kirimPermintaanGitHub(metode, endpoint, token, jsonBody, onSelesa
         progress.show()
     end
 
-    Thread(Runnable{
-        run = function()
-            local ok, res = pcall(function()
-                local url = URL(endpoint)
-                local conn = url.openConnection()
-
-                if metode == "PATCH" then
-                    local okPatch = pcall(function() conn.setRequestMethod("PATCH") end)
-                    if not okPatch then
-                        conn.setRequestMethod("POST")
-                        conn.setRequestProperty("X-HTTP-Method-Override", "PATCH")
-                    end
-                else
-                    conn.setRequestMethod(metode)
-                end
-
-                conn.setRequestProperty("Authorization", "Bearer " .. token)
-                conn.setRequestProperty("User-Agent", "Android-Accessibility-Manager")
-                conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.setConnectTimeout(15000)
-                conn.setReadTimeout(20000)
-
-                if jsonBody ~= nil and jsonBody ~= "" then
-                    conn.setDoOutput(true)
-                    local os = conn.getOutputStream()
-                    os.write(String(jsonBody).getBytes("UTF-8"))
-                    os.flush()
-                    os.close()
-                end
-
-                local respCode = conn.getResponseCode()
-                local inputStream
-                if respCode >= 200 and respCode < 300 then
-                    pcall(function() inputStream = conn.getInputStream() end)
-                else
-                    pcall(function() inputStream = conn.getErrorStream() end)
-                end
-
-                local lines = {}
-                if inputStream ~= nil then
-                    local reader = BufferedReader(InputStreamReader(inputStream, "UTF-8"))
-                    local line = reader.readLine()
-                    while line ~= nil do
-                        table.insert(lines, tostring(line))
-                        line = reader.readLine()
-                    end
-                    reader.close()
-                end
-
-                local hasil = table.concat(lines, "\n")
-                if respCode >= 200 and respCode < 300 then
-                    return hasil
-                else
-                    local pesanError = "Gagal. Kode: " .. respCode
-                    pcall(function()
-                        local jsonErr = JSONObject(hasil)
-                        pesanError = pesanError .. " (" .. jsonErr.optString("message", "") .. ")"
-                    end)
-                    error(pesanError)
-                end
+    local function jalankanPercobaan(percobaanKe)
+        if progress and percobaanKe > 1 then
+            pcall(function()
+                progress.setMessage("Koneksi gagal, mencoba lagi (" .. percobaanKe .. "/" .. MAX_PERCOBAAN_JARINGAN .. ")...")
             end)
-
-            mainHandler.post(Runnable{
-                run = function()
-                    if progress then
-                        pcall(function() progress.dismiss() end)
-                    end
-                    onSelesai(ok, res)
-                end
-            })
         end
-    }).start()
+
+        Thread(Runnable{
+            run = function()
+                local ok, res = pcall(function()
+                    local url = URL(endpoint)
+                    local conn = url.openConnection()
+
+                    if metode == "PATCH" then
+                        local okPatch = pcall(function() conn.setRequestMethod("PATCH") end)
+                        if not okPatch then
+                            conn.setRequestMethod("POST")
+                            conn.setRequestProperty("X-HTTP-Method-Override", "PATCH")
+                        end
+                    else
+                        conn.setRequestMethod(metode)
+                    end
+
+                    conn.setRequestProperty("Authorization", "Bearer " .. token)
+                    conn.setRequestProperty("User-Agent", "Android-Accessibility-Manager")
+                    conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
+                    conn.setRequestProperty("Content-Type", "application/json")
+                    conn.setConnectTimeout(15000)
+                    conn.setReadTimeout(20000)
+
+                    if jsonBody ~= nil and jsonBody ~= "" then
+                        conn.setDoOutput(true)
+                        local os = conn.getOutputStream()
+                        os.write(String(jsonBody).getBytes("UTF-8"))
+                        os.flush()
+                        os.close()
+                    end
+
+                    local respCode = conn.getResponseCode()
+                    local inputStream
+                    if respCode >= 200 and respCode < 300 then
+                        pcall(function() inputStream = conn.getInputStream() end)
+                    else
+                        pcall(function() inputStream = conn.getErrorStream() end)
+                    end
+
+                    local lines = {}
+                    if inputStream ~= nil then
+                        local reader = BufferedReader(InputStreamReader(inputStream, "UTF-8"))
+                        local line = reader.readLine()
+                        while line ~= nil do
+                            table.insert(lines, tostring(line))
+                            line = reader.readLine()
+                        end
+                        reader.close()
+                    end
+
+                    local hasil = table.concat(lines, "\n")
+                    if respCode >= 200 and respCode < 300 then
+                        return hasil
+                    else
+                        local pesanError = "Gagal. Kode: " .. respCode
+                        pcall(function()
+                            local jsonErr = JSONObject(hasil)
+                            pesanError = pesanError .. " (" .. jsonErr.optString("message", "") .. ")"
+                        end)
+                        error(pesanError)
+                    end
+                end)
+
+                if ok then
+                    mainHandler.post(Runnable{
+                        run = function()
+                            if progress then
+                                pcall(function() progress.dismiss() end)
+                            end
+                            onSelesai(true, res)
+                        end
+                    })
+                else
+                    if apakahErrorJaringan(res) and percobaanKe < MAX_PERCOBAAN_JARINGAN then
+                        mainHandler.postDelayed(Runnable{
+                            run = function()
+                                jalankanPercobaan(percobaanKe + 1)
+                            end
+                        }, JEDA_DASAR_RETRY_MS * percobaanKe)
+                    else
+                        mainHandler.post(Runnable{
+                            run = function()
+                                if progress then
+                                    pcall(function() progress.dismiss() end)
+                                end
+                                onSelesai(false, res)
+                            end
+                        })
+                    end
+                end
+            end
+        }).start()
+    end
+
+    jalankanPercobaan(1)
 end
 
 -- ==========================================================
@@ -426,7 +470,9 @@ end
 -- ==========================================================
 -- 1. DAFTAR & PENCARIAN REPOSITORI (PENGURUTAN TERAKHIR DIEDIT)
 -- ==========================================================
-daftarRepoSayaDialog = function(token)
+daftarRepoSayaDialog = function(token, filterAktif)
+    filterAktif = filterAktif or "semua"
+
     local endpoint = "https://api.github.com/user/repos?sort=updated&direction=desc&per_page=100&affiliation=owner"
     kirimPermintaanGitHub("GET", endpoint, token, nil, function(ok, res)
         if not ok then
@@ -437,23 +483,36 @@ daftarRepoSayaDialog = function(token)
         local okProses, hasilData = pcall(function()
             local arr = JSONArray(res)
             local total = arr.length()
-            local repoDataList = {}
+            local repoDataListSemua = {}
             for i = 0, total - 1 do
-                table.insert(repoDataList, arr.getJSONObject(i))
+                table.insert(repoDataListSemua, arr.getJSONObject(i))
             end
 
-            table.sort(repoDataList, function(a, b)
+            table.sort(repoDataListSemua, function(a, b)
                 return ambilWaktuTerakhirEdit(a) > ambilWaktuTerakhirEdit(b)
             end)
 
-            local listItems = {}
-            for i, item in ipairs(repoDataList) do
-                local nama = item.optString("name", "")
-                local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
-                table.insert(listItems, string.format("%d. %s %s", i, nama, status))
+            -- Terapkan filter publik/privat di sisi klien ("nama" tetap menampilkan semua, hanya urutannya beda)
+            local repoDataList = {}
+            for _, item in ipairs(repoDataListSemua) do
+                local isPrivate = item.optBoolean("private", false)
+                if filterAktif == "publik" then
+                    if not isPrivate then table.insert(repoDataList, item) end
+                elseif filterAktif == "privat" then
+                    if isPrivate then table.insert(repoDataList, item) end
+                else
+                    table.insert(repoDataList, item)
+                end
             end
 
-            return {list = listItems, data = repoDataList}
+            -- Jika mode "urutkan nama" dipilih, urutkan ulang berdasarkan nama repo (A-Z, tanpa memandang huruf besar/kecil)
+            if filterAktif == "nama" then
+                table.sort(repoDataList, function(a, b)
+                    return a.optString("name", ""):lower() < b.optString("name", ""):lower()
+                end)
+            end
+
+            return {dataSemua = repoDataListSemua, data = repoDataList}
         end)
 
         if not okProses or not hasilData then
@@ -461,11 +520,12 @@ daftarRepoSayaDialog = function(token)
             return
         end
 
-        local listItems = hasilData.list
+        local repoDataListSemua = hasilData.dataSemua
         local repoDataList = hasilData.data
+        local totalSemua = #repoDataListSemua
         local total = #repoDataList
 
-        if total == 0 then
+        if totalSemua == 0 then
             if service.speak then service.speak("Belum ada repositori.") end
             Toast.makeText(service, "Belum ada repositori.", Toast.LENGTH_SHORT).show()
             menuUtama()
@@ -474,21 +534,50 @@ daftarRepoSayaDialog = function(token)
 
         if service.speak then service.speak("Ditemukan " .. total .. " repositori.") end
 
-        -- Menyisipkan "Segarkan" sebagai item paling atas, sebelum daftar nama repositori
-        local listItemsTampil = {"Segarkan daftar"}
-        for _, teks in ipairs(listItems) do
-            table.insert(listItemsTampil, teks)
+        local labelFilter = "Semua"
+        if filterAktif == "publik" then labelFilter = "Publik"
+        elseif filterAktif == "privat" then labelFilter = "Privat"
+        elseif filterAktif == "nama" then labelFilter = "Nama (A-Z)" end
+
+        -- Item tetap di bagian paling atas, sebelum daftar nama repositori
+        local listItemsTampil = {
+            "Segarkan daftar",
+            "Filter: " .. labelFilter .. " (ketuk untuk ganti)",
+            "Pilih banyak (multi-select)"
+        }
+        local offsetItemTetap = #listItemsTampil
+
+        if total == 0 then
+            table.insert(listItemsTampil, "(tidak ada repositori dengan filter ini)")
+        else
+            for i, item in ipairs(repoDataList) do
+                local nama = item.optString("name", "")
+                local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
+                table.insert(listItemsTampil, string.format("%d. %s %s", i, nama, status))
+            end
         end
 
         local b = AlertDialog.Builder(service)
-        b.setTitle("Repositori saya (" .. total .. ")")
+        b.setTitle("Repositori saya (" .. total .. "/" .. totalSemua .. ") - " .. labelFilter)
         b.setItems(listItemsTampil, DialogInterface.OnClickListener{
             onClick = function(dialog, which)
                 if which == 0 then
                     if service.speak then service.speak("Menyegarkan daftar repositori.") end
-                    daftarRepoSayaDialog(token)
+                    daftarRepoSayaDialog(token, filterAktif)
+                elseif which == 1 then
+                    filterRepoDialog(token, filterAktif)
+                elseif which == 2 then
+                    if total == 0 then
+                        Toast.makeText(service, "Tidak ada repositori untuk dipilih.", Toast.LENGTH_SHORT).show()
+                        daftarRepoSayaDialog(token, filterAktif)
+                    else
+                        multiSelectRepoDialog(token, repoDataList, filterAktif, {})
+                    end
+                elseif total == 0 then
+                    daftarRepoSayaDialog(token, filterAktif)
                 else
-                    kelolaRepoPilihanDialog(repoDataList[which], token)
+                    local idx = which - offsetItemTetap + 1
+                    kelolaRepoPilihanDialog(repoDataList[idx], token)
                 end
             end
         })
@@ -500,6 +589,204 @@ daftarRepoSayaDialog = function(token)
         diag.show()
         aturTombolHurufKecil(diag, nil, "kembali", nil)
     end)
+end
+
+-- Dialog pemilihan filter repositori (semua / publik / privat / urutan nama)
+filterRepoDialog = function(token, filterAktifSaatIni)
+    local opsi = {"Semua repositori", "Publik saja", "Privat saja", "Urutkan nama (A-Z)"}
+    local b = AlertDialog.Builder(service)
+    b.setTitle("Filter repositori")
+    b.setItems(opsi, DialogInterface.OnClickListener{
+        onClick = function(dialog, which)
+            if which == 0 then
+                daftarRepoSayaDialog(token, "semua")
+            elseif which == 1 then
+                daftarRepoSayaDialog(token, "publik")
+            elseif which == 2 then
+                daftarRepoSayaDialog(token, "privat")
+            elseif which == 3 then
+                daftarRepoSayaDialog(token, "nama")
+            end
+        end
+    })
+    b.setNegativeButton("kembali", DialogInterface.OnClickListener{
+        onClick = function() daftarRepoSayaDialog(token, filterAktifSaatIni) end
+    })
+    local diag = b.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.show()
+    aturTombolHurufKecil(diag, nil, "kembali", nil)
+end
+
+-- ==========================================================
+-- 1B. PILIH BANYAK REPO (MULTI-SELECT) & AKSI MASSAL
+-- ==========================================================
+multiSelectRepoDialog = function(token, repoDataList, filterAktif, terpilihMap)
+    local items = {}
+    local jumlahTerpilih = 0
+    for i, item in ipairs(repoDataList) do
+        local nama = item.optString("name", "")
+        local fullName = item.optString("full_name", "")
+        local status = item.optBoolean("private", false) and "[privat]" or "[publik]"
+        local tanda = terpilihMap[fullName] and "[x] " or "[ ] "
+        if terpilihMap[fullName] then jumlahTerpilih = jumlahTerpilih + 1 end
+        table.insert(items, tanda .. nama .. " " .. status)
+    end
+
+    local b = AlertDialog.Builder(service)
+    b.setTitle("Pilih banyak repo (" .. jumlahTerpilih .. " terpilih)")
+    b.setItems(items, DialogInterface.OnClickListener{
+        onClick = function(dialog, which)
+            local item = repoDataList[which + 1]
+            local fullName = item.optString("full_name", "")
+            terpilihMap[fullName] = not terpilihMap[fullName]
+            multiSelectRepoDialog(token, repoDataList, filterAktif, terpilihMap)
+        end
+    })
+    b.setPositiveButton("hapus terpilih", DialogInterface.OnClickListener{
+        onClick = function()
+            local daftarFullName = {}
+            for fn, dipilih in pairs(terpilihMap) do
+                if dipilih then table.insert(daftarFullName, fn) end
+            end
+            if #daftarFullName == 0 then
+                Toast.makeText(service, "Belum ada repositori dipilih.", Toast.LENGTH_SHORT).show()
+                multiSelectRepoDialog(token, repoDataList, filterAktif, terpilihMap)
+                return
+            end
+
+            local konfirm = AlertDialog.Builder(service)
+            konfirm.setTitle("Hapus " .. #daftarFullName .. " repositori?")
+            konfirm.setMessage("Repositori berikut akan dihapus permanen dari GitHub:\n\n" .. table.concat(daftarFullName, "\n"))
+            konfirm.setPositiveButton("hapus semua", DialogInterface.OnClickListener{
+                onClick = function()
+                    prosesHapusBanyakRepo(token, daftarFullName, filterAktif)
+                end
+            })
+            konfirm.setNegativeButton("batal", DialogInterface.OnClickListener{
+                onClick = function() multiSelectRepoDialog(token, repoDataList, filterAktif, terpilihMap) end
+            })
+            local dK = konfirm.create()
+            dK.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+            dK.show()
+            aturTombolHurufKecil(dK, "hapus semua", "batal", nil)
+        end
+    })
+    b.setNeutralButton("ubah privasi terpilih", DialogInterface.OnClickListener{
+        onClick = function()
+            local daftarFullName = {}
+            for fn, dipilih in pairs(terpilihMap) do
+                if dipilih then table.insert(daftarFullName, fn) end
+            end
+            if #daftarFullName == 0 then
+                Toast.makeText(service, "Belum ada repositori dipilih.", Toast.LENGTH_SHORT).show()
+                multiSelectRepoDialog(token, repoDataList, filterAktif, terpilihMap)
+                return
+            end
+
+            local pilihStatus = AlertDialog.Builder(service)
+            pilihStatus.setTitle("Ubah privasi " .. #daftarFullName .. " repositori menjadi:")
+            pilihStatus.setItems({"Jadikan publik", "Jadikan privat"}, DialogInterface.OnClickListener{
+                onClick = function(d2, which2)
+                    local targetPrivat = (which2 == 1)
+                    prosesUbahPrivasiBanyakRepo(token, daftarFullName, targetPrivat, filterAktif)
+                end
+            })
+            pilihStatus.setNegativeButton("batal", DialogInterface.OnClickListener{
+                onClick = function() multiSelectRepoDialog(token, repoDataList, filterAktif, terpilihMap) end
+            })
+            local dP = pilihStatus.create()
+            dP.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+            dP.show()
+            aturTombolHurufKecil(dP, nil, "batal", nil)
+        end
+    })
+    b.setNegativeButton("kembali", DialogInterface.OnClickListener{
+        onClick = function() daftarRepoSayaDialog(token, filterAktif) end
+    })
+    local diag = b.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.show()
+    aturTombolHurufKecil(diag, "hapus terpilih", "kembali", "ubah privasi terpilih")
+end
+
+-- Menjalankan satu aksi HTTP untuk banyak repo secara berurutan, dengan progres yang diperbarui setiap langkah
+jalankanOperasiBanyakRepo = function(daftarFullName, judulOperasi, fungsiPerRepo, callbackSelesai)
+    local progress = ProgressDialog(service)
+    progress.setTitle(judulOperasi)
+    progress.setCancelable(false)
+    progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    progress.show()
+
+    local total = #daftarFullName
+    local listSukses = {}
+    local listGagal = {}
+
+    local function lanjut(indexKe)
+        if indexKe > total then
+            pcall(function() progress.dismiss() end)
+            callbackSelesai(listSukses, listGagal)
+            return
+        end
+
+        local fullName = daftarFullName[indexKe]
+        pcall(function()
+            progress.setMessage("(" .. indexKe .. "/" .. total .. ") " .. fullName)
+        end)
+
+        fungsiPerRepo(fullName, function(ok, res)
+            if ok then
+                table.insert(listSukses, fullName)
+            else
+                table.insert(listGagal, fullName .. " (" .. tostring(res) .. ")")
+            end
+            lanjut(indexKe + 1)
+        end)
+    end
+
+    lanjut(1)
+end
+
+prosesHapusBanyakRepo = function(token, daftarFullName, filterAktif)
+    jalankanOperasiBanyakRepo(daftarFullName, "Menghapus repositori...", function(fullName, cb)
+        local endpoint = "https://api.github.com/repos/" .. fullName
+        kirimPermintaanGitHub("DELETE", endpoint, token, nil, cb, true)
+    end, function(listSukses, listGagal)
+        tampilkanHasilOperasiBanyak("Hapus repositori", listSukses, listGagal, token, filterAktif)
+    end)
+end
+
+prosesUbahPrivasiBanyakRepo = function(token, daftarFullName, targetPrivat, filterAktif)
+    jalankanOperasiBanyakRepo(daftarFullName, "Mengubah privasi...", function(fullName, cb)
+        local endpoint = "https://api.github.com/repos/" .. fullName
+        local payload = JSONObject()
+        payload.put("private", targetPrivat)
+        kirimPermintaanGitHub("PATCH", endpoint, token, payload.toString(), cb, true)
+    end, function(listSukses, listGagal)
+        tampilkanHasilOperasiBanyak("Ubah privasi repositori", listSukses, listGagal, token, filterAktif)
+    end)
+end
+
+tampilkanHasilOperasiBanyak = function(judul, listSukses, listGagal, token, filterAktif)
+    local pesan = "Berhasil: " .. #listSukses .. "\nGagal: " .. #listGagal
+    if #listGagal > 0 then
+        pesan = pesan .. "\n\nDetail gagal:\n" .. table.concat(listGagal, "\n")
+    end
+
+    if service.speak then
+        service.speak(judul .. " selesai. Berhasil " .. #listSukses .. ", gagal " .. #listGagal)
+    end
+
+    local d = AlertDialog.Builder(service)
+    d.setTitle(judul .. " selesai")
+    d.setMessage(pesan)
+    d.setPositiveButton("oke", DialogInterface.OnClickListener{
+        onClick = function() daftarRepoSayaDialog(token, filterAktif) end
+    })
+    local diag = d.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.show()
+    aturTombolHurufKecil(diag, "oke", nil, nil)
 end
 
 -- Dialog pencarian repositori cepat
