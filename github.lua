@@ -20,7 +20,7 @@ local mainHandler = Handler(Looper.getMainLooper())
 -- ==========================================================
 -- PENGATURAN VERSI & TAUTAN SKRIP PEMBARUAN
 -- ==========================================================
-local VERSI_SAAT_INI = "1.8"
+local VERSI_SAAT_INI = "1.9"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pembaruan otomatis
@@ -32,8 +32,6 @@ local JALUR_BERKAS_SCRIPT = (infoScript and infoScript.source and infoScript.sou
 local PREF_NAME = "github_acc_manager_exclusive_unique_cfg"
 local KEY_TOKEN = "key_github_user_pat_unique"
 local prefs = service.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-
-local sudahCekOtomatis = false
 
 -- Deklarasi fungsi navigasi bertingkat
 local menuUtama, tampilkanDialogLogin
@@ -1798,15 +1796,6 @@ menuUtama = function()
     if token == "" then
         tampilkanDialogLogin()
         return
-    end
-
-    if not sudahCekOtomatis then
-        sudahCekOtomatis = true
-        mainHandler.postDelayed(Runnable{
-            run = function()
-                cekPembaruan(false)
-            end
-        }, 3000)
     end
 
     local menuItems = {
