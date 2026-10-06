@@ -22,7 +22,7 @@ local mainHandler = Handler(Looper.getMainLooper())
 -- ==========================================================
 -- PENGATURAN VERSI & TAUTAN SKRIP PEMBARUAN
 -- ==========================================================
-local VERSI_SAAT_INI = "1.11"
+local VERSI_SAAT_INI = "1.12"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 -- Jalur berkas skrip saat ini untuk pembaruan otomatis
@@ -3717,32 +3717,114 @@ function PembuatAPK.hapusProyekGitHub(fullName,token)
         {"batalkan",function() PembuatAPK.menuAplikasi(fullName,token) end})
 end
 
+function PembuatAPK.editMainActivity(fullName, token)
+    local progress = ProgressDialog(service)
+    progress.setTitle("Mencari berkas utama")
+    progress.setMessage("Sedang memeriksa berkas proyek...")
+    progress.setCancelable(false)
+    progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    progress.show()
+
+    kirimPermintaanGitHub("GET", "https://api.github.com/repos/" .. fullName, token, nil, function(okRepo, resRepo)
+        if not okRepo then
+            pcall(function() progress.dismiss() end)
+            Toast.makeText(service, "Gagal membaca repositori: " .. tostring(resRepo), Toast.LENGTH_LONG).show()
+            PembuatAPK.menuAplikasi(fullName, token)
+            return
+        end
+
+        local defBranch = JSONObject(resRepo).optString("default_branch", "main")
+        local endpointTree = "https://api.github.com/repos/" .. fullName .. "/git/trees/" .. defBranch .. "?recursive=1"
+
+        kirimPermintaanGitHub("GET", endpointTree, token, nil, function(okTree, resTree)
+            if not okTree then
+                pcall(function() progress.dismiss() end)
+                Toast.makeText(service, "Gagal memeriksa daftar berkas: " .. tostring(resTree), Toast.LENGTH_LONG).show()
+                PembuatAPK.menuAplikasi(fullName, token)
+                return
+            end
+
+            local mainPath = nil
+            pcall(function()
+                local treeObj = JSONObject(resTree)
+                local treeArr = treeObj.optJSONArray("tree")
+                if treeArr ~= nil then
+                    for i = 0, treeArr.length() - 1 do
+                        local item = treeArr.getJSONObject(i)
+                        local p = item.optString("path", "")
+                        if p:match("MainActivity%.java$") or p:match("MainActivity%.kt$") then
+                            mainPath = p
+                            break
+                        end
+                    end
+                end
+            end)
+
+            if not mainPath then
+                pcall(function() progress.dismiss() end)
+                if service.speak then service.speak("Berkas MainActivity tidak ditemukan.") end
+                Toast.makeText(service, "Berkas MainActivity.java atau .kt tidak ditemukan di proyek ini.", Toast.LENGTH_LONG).show()
+                PembuatAPK.menuAplikasi(fullName, token)
+                return
+            end
+
+            pcall(function() progress.setMessage("Membuka " .. (mainPath:match("[^/]+$") or mainPath) .. "...") end)
+
+            local endpointContent = "https://api.github.com/repos/" .. fullName .. "/contents/" .. mainPath
+            kirimPermintaanGitHub("GET", endpointContent, token, nil, function(okContent, resContent)
+                pcall(function() progress.dismiss() end)
+                if not okContent then
+                    Toast.makeText(service, "Gagal mengambil berkas: " .. tostring(resContent), Toast.LENGTH_LONG).show()
+                    PembuatAPK.menuAplikasi(fullName, token)
+                    return
+                end
+
+                local obj = JSONObject(resContent)
+                local sha = obj.optString("sha", "")
+                local base64Content = obj.optString("content", ""):gsub("%s+", "")
+                local bytes = Base64.decode(base64Content, Base64.DEFAULT)
+                local isiTeks = String(bytes, "UTF-8")
+
+                if service.speak then service.speak("Membuka editor " .. (mainPath:match("[^/]+$") or "MainActivity")) end
+
+                formEditIsiBerkas(fullName, mainPath, sha, isiTeks, token, function()
+                    PembuatAPK.menuAplikasi(fullName, token)
+                end, function()
+                    PembuatAPK.menuAplikasi(fullName, token)
+                end)
+            end, true)
+        end, true)
+    end, true)
+end
+
 PembuatAPK.menuAplikasi = function(fullName, token)
     local item={
         "1. Periksa status pembangunan",
         "2. Unduh APK/AAB Release",
         "3. Mulai pembangunan APK",
-        "4. Lihat Artifact dan laporan",
-        "5. Lihat workflow dan log",
-        "6. Kelola berkas proyek",
-        "7. Buka proyek di GitHub",
-        "8. Hapus dari daftar aplikasi",
-        "9. Hapus proyek dari GitHub"
+        "4. Edit berkas MainActivity.java",
+        "5. Lihat Artifact dan laporan",
+        "6. Lihat workflow dan log",
+        "7. Kelola berkas proyek",
+        "8. Buka proyek di GitHub",
+        "9. Hapus dari daftar aplikasi",
+        "10. Hapus proyek dari GitHub"
     }
     local b=AlertDialog.Builder(service); b.setTitle("Kelola aplikasi\n"..fullName)
     b.setItems(item,DialogInterface.OnClickListener{onClick=function(_,which)
         if which==0 then PembuatAPK.cekStatus(fullName,token)
         elseif which==1 then PembuatAPK.ambilAPK(fullName,token)
         elseif which==2 then PembuatAPK.bangunUlang(fullName,token)
-        elseif which==3 then PembuatAPK.bukaArtifact(fullName,token)
-        elseif which==4 then PembuatAPK.bukaPengaturanWorkflow(fullName,token)
-        elseif which==5 then PembuatAPK.kelolaBerkas(fullName,token)
-        elseif which==6 then bukaBrowser("https://github.com/"..fullName)
-        elseif which==7 then
+        elseif which==3 then PembuatAPK.editMainActivity(fullName,token)
+        elseif which==4 then PembuatAPK.bukaArtifact(fullName,token)
+        elseif which==5 then PembuatAPK.bukaPengaturanWorkflow(fullName,token)
+        elseif which==6 then PembuatAPK.kelolaBerkas(fullName,token)
+        elseif which==7 then bukaBrowser("https://github.com/"..fullName)
+        elseif which==8 then
             local daftar=ambilDaftarAplikasi(); local baru={}
             for _,n in ipairs(daftar) do if n~=fullName then table.insert(baru,n) end end
             simpanDaftarAplikasi(baru); Toast.makeText(service,"Dihapus dari daftar aplikasi. Proyek GitHub tetap ada.",Toast.LENGTH_LONG).show(); PembuatAPK.daftar(token)
-        elseif which==8 then PembuatAPK.hapusProyekGitHub(fullName,token) end
+        elseif which==9 then PembuatAPK.hapusProyekGitHub(fullName,token) end
     end})
     b.setNegativeButton("kembali",DialogInterface.OnClickListener{onClick=function() PembuatAPK.daftar(token) end})
     local d=b.create(); d.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY); d.show(); aturTombolHurufKecil(d,nil,"kembali",nil)
