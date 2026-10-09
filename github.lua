@@ -19,7 +19,7 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
-local VERSI_SAAT_INI = "1.15"
+local VERSI_SAAT_INI = "1.16"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 local infoScript = debug.getinfo(1, "S")
@@ -1775,7 +1775,7 @@ include ':app'
 
 TEMPLAT.buildRoot = [==[
 plugins {
-    id 'com.android.application' version '8.6.1' apply false
+    id 'com.android.application' version '8.7.0' apply false
     id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
 }
 ]==]
@@ -2164,6 +2164,9 @@ jobs:
       - name: Ambil kode sumber
         uses: actions/checkout@v4
 
+      - name: Ekstrak ZIP proyek
+        run: for z in *.zip; do [ -f "$z" ] && unzip -o "$z"; done
+
       - name: Pasang Java 17
         uses: actions/setup-java@v4
         with:
@@ -2183,14 +2186,17 @@ jobs:
       - name: Siapkan Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.7
+          gradle-version: 9.3.1
 
       - name: Kompilasi APK Android
-        run: gradle assembleDebug --no-daemon -x lint -x test
+        run: |
+          GDIR=$(find . -maxdepth 4 \( -name "settings.gradle*" -o -name "build.gradle*" \) ! -path "*/build/*" | head -n 1)
+          [ -n "$GDIR" ] && cd "$(dirname "$GDIR")"
+          gradle assembleDebug --no-daemon -x lint -x test
 
       - name: Siapkan berkas APK
         run: |
-          APK_PATH=$(find app/build/outputs/apk -name "*.apk" | head -n 1)
+          APK_PATH=$(find . -path "*/build/outputs/apk/*" -name "*.apk" | head -n 1)
           test -n "$APK_PATH" || { echo "Berkas APK tidak ditemukan!"; exit 1; }
           cp "$APK_PATH" "@@NAMA_APK@@-v${{ github.run_number }}.apk"
 
@@ -2448,7 +2454,7 @@ PembuatAPK.susunBerkas = function(o)
     local versiBersih = tostring(o.versi):gsub("[^%w%.%-]", "")
     if versiBersih == "" then versiBersih = "1.0.0" end
     local javaVersion = o.javaVersion or "17"
-    local gradleVersion = o.gradleVersion or "8.7"
+    local gradleVersion = o.gradleVersion or "9.3.1"
     local jenis = o.jenisBuild or "debug"
     local matrixJenis = daftarMatrix(jenis)
     local apk = o.hasApk ~= false
@@ -2762,7 +2768,7 @@ PembuatAPK.formAplikasiBaru = function(token)
             jenisBuild=jenisBuild,hasApk=hasApk,hasAab=hasAab,abi=(sv(abi)=="ARM64-v8a" and "arm64" or sv(abi)=="ARMv7" and "armv7" or sv(abi)=="ARM64 + ARMv7" and "arm64armv7" or "universal"),minify=minify.isChecked(),shrink=shrink.isChecked(),runLint=lint.isChecked(),runUnitTest=unit.isChecked(),runInstrumentation=instr.isChecked(),
             validateWrapper=wrapper.isChecked(),failFast=failfast.isChecked(),emulatorApi=apiEmulator,push=push.isChecked(),pullRequest=pr.isChecked(),schedule=schedule.isChecked(),cache=cache.isChecked(),
             publish=publish.isChecked(),makeRelease=release.isChecked(),attest=attest.isChecked(),retention=lamaSimpan,signing=signing.isChecked(),readme=readme.isChecked(),tema=sv(tema),orientasi=sv(orientasi),warnaIkon=w,backup=true,clearText=false,
-            javaVersion="17",gradleVersion="8.7",mediaGesture=media.isChecked()})
+            javaVersion="17",gradleVersion="9.3.1",mediaGesture=media.isChecked()})
     end})
     b.setNegativeButton("kembali",DialogInterface.OnClickListener{onClick=function() PembuatAPK.menu(token) end})
     local d=b.create(); d.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY); d.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE); d.show(); aturTombolHurufKecil(d,"buat proyek","kembali",nil)
