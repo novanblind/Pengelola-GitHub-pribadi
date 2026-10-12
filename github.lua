@@ -19,7 +19,7 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
-local VERSI_SAAT_INI = "1.16"
+local VERSI_SAAT_INI = "1.17"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 local infoScript = debug.getinfo(1, "S")
@@ -3035,6 +3035,312 @@ function PembuatAPK.pantau(fullName, token, kb, idAwal)
     tick()
 end
 
+-- ===== Analisis log build (mulai v1.17) =====
+-- Setiap item: {kata kunci huruf kecil (dicari apa adanya), penjelasan dalam bahasa Indonesia}
+PembuatAPK.DAFTAR_PENYEBAB = {
+    {"unresolved reference", "Ada nama (kelas, fungsi, variabel, atau sumber daya R.xxx) yang dipakai kode tetapi tidak ditemukan. Penyebab umum: salah ketik, lupa import, pustaka belum terpasang, atau sumber daya belum dibuat di folder res."},
+    {"type mismatch", "Tipe data tidak cocok: nilai yang diberikan bukan tipe yang diminta oleh fungsi atau variabel."},
+    {"overrides nothing", "Fungsi bertanda override tidak ada di kelas induknya. Nama atau parameternya berbeda dengan yang dimiliki versi Android atau pustaka yang dipakai."},
+    {"overload resolution ambiguity", "Pemanggilan fungsi ambigu: ada beberapa fungsi yang cocok sehingga kompiler tidak bisa memilih."},
+    {"none of the following candidates", "Pemanggilan fungsi tidak cocok dengan parameter yang tersedia (jumlah atau tipe parameter salah)."},
+    {"must be exhaustive", "Ekspresi when atau if dipakai sebagai nilai tetapi tidak menutup semua kemungkinan. Tambahkan cabang else."},
+    {"val cannot be reassigned", "Nilai bertanda val diubah setelah diisi. Ganti val menjadi var."},
+    {"expecting '", "Penulisan kode salah: kurang atau berlebih tanda kurung, koma, atau kata kunci."},
+    {"cannot find symbol", "Kode Java memakai nama yang tidak ditemukan (kelas, fungsi, atau variabel)."},
+    {"was compiled with an incompatible version of kotlin", "Ada pustaka yang dibuat dengan versi Kotlin lebih baru daripada yang dipakai proyek. Naikkan versi plugin Kotlin atau pakai versi pustaka yang lebih lama."},
+    {"could not resolve", "Pustaka atau plugin tidak bisa diunduh. Nama atau versinya salah, atau alamat repositori (google, mavenCentral, jitpack) belum didaftarkan di settings.gradle."},
+    {"could not find ", "Pustaka, plugin, atau berkas yang diminta tidak ditemukan. Periksa nama, versi, dan daftar repositori."},
+    {"failed to find target with hash string", "Platform Android untuk compileSdk belum terpasang di mesin GitHub. Pasang platform itu di langkah SDK, atau turunkan compileSdk."},
+    {"licenses have not been accepted", "Lisensi paket Android SDK belum diterima, jadi paket yang dibutuhkan tidak bisa dipasang otomatis."},
+    {"failed to install the following", "Paket Android SDK yang dibutuhkan gagal dipasang otomatis (biasanya karena lisensi belum diterima atau nama paket salah)."},
+    {"sdk location not found", "Lokasi Android SDK tidak diketahui oleh Gradle. Langkah pemasangan SDK mungkin gagal."},
+    {"java heap space", "Memori Java kehabisan saat membangun. Naikkan nilai org.gradle.jvmargs di gradle.properties."},
+    {"outofmemoryerror", "Memori kehabisan saat membangun. Naikkan nilai org.gradle.jvmargs di gradle.properties."},
+    {"unsupported class file major version", "Versi Java tidak cocok dengan Gradle atau pustaka yang dipakai. Pastikan versi Java di workflow sesuai kebutuhan proyek."},
+    {"invalid source release", "Versi Java di workflow lebih rendah dari yang diminta proyek. Naikkan versi Java di langkah pemasangan Java."},
+    {"inconsistent jvm-target", "Target JVM Java dan Kotlin berbeda. Samakan sourceCompatibility, targetCompatibility, dan jvmTarget."},
+    {"duplicate class", "Ada kelas ganda: dua pustaka berisi kelas yang sama. Hapus salah satu pustaka atau kecualikan salah satunya."},
+    {"manifest merger failed", "Penggabungan AndroidManifest.xml gagal. Baca pesan di atasnya untuk melihat atribut atau komponen yang bermasalah."},
+    {"android:exported", "Komponen di AndroidManifest.xml (activity, service, receiver) yang punya intent-filter wajib memakai android:exported untuk target SDK 31 ke atas."},
+    {"linking references failed", "Ada sumber daya (string, gaya, gambar) yang dirujuk tetapi tidak ada atau salah tulis di folder res atau AndroidManifest.xml."},
+    {"error: resource", "Ada sumber daya yang dirujuk tetapi tidak ditemukan. Periksa nama dan folder res."},
+    {"minsdkversion", "minSdk proyek lebih kecil dari yang dibutuhkan salah satu pustaka. Naikkan minSdk atau pakai pustaka versi lama."},
+    {"minimum supported gradle version", "Versi Gradle terlalu rendah untuk plugin Android (AGP). Naikkan gradle-version di workflow."},
+    {"script compilation error", "Berkas build.gradle atau settings.gradle salah tulis. Baca baris yang disebut di pesan."},
+    {"could not get unknown property", "Berkas build.gradle memakai properti yang tidak dikenal. Periksa ejaan atau versi plugin."},
+    {"no signature of method", "Berkas build.gradle memanggil fungsi yang tidak ada di versi Gradle atau plugin ini."},
+    {"end-of-central-directory", "Berkas ZIP proyek rusak atau tidak lengkap saat diekstrak. Unggah ulang ZIP-nya."},
+    {"does not contain a gradle build", "Gradle tidak menemukan settings.gradle atau build.gradle di folder proyek. Periksa struktur folder di repo."},
+    {"berkas apk tidak ditemukan", "Pembangunan selesai tetapi tidak menghasilkan berkas APK. Periksa tugas assembleDebug dan jalur keluaran."},
+    {"permission denied", "Ada berkas yang tidak boleh dijalankan atau dibaca (misalnya gradlew tanpa izin eksekusi)."},
+}
+
+-- Membersihkan satu baris log: buang cap waktu, kode warna, dan karakter CR.
+PembuatAPK.bersihkanBarisLog = function(b)
+    local c = tostring(b)
+    c = c:gsub("^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d%.%d+Z%s?", "")
+    c = c:gsub("\27%[[%d;]*[A-Za-z]", "")
+    c = c:gsub("\r", "")
+    return c
+end
+
+PembuatAPK.pangkasTeks = function(s)
+    s = tostring(s)
+    s = s:gsub("^%s+", "")
+    s = s:gsub("%s+$", "")
+    return s
+end
+
+-- Memendekkan jalur berkas di mesin GitHub menjadi jalur relatif di dalam repo.
+PembuatAPK.pendekkanJalur = function(p)
+    p = tostring(p)
+    p = p:gsub("^file:///", "/")
+    p = p:gsub("^/?home/runner/work/[^/]+/[^/]+/", "")
+    return p
+end
+
+PembuatAPK.formatGalatKode = function(g)
+    local lokasi = ""
+    if g.berkas then
+        lokasi = g.berkas
+        if g.baris then lokasi = lokasi .. " baris " .. tostring(g.baris) end
+        if g.kolom then lokasi = lokasi .. " kolom " .. tostring(g.kolom) end
+        lokasi = lokasi .. ": "
+    end
+    return "[" .. g.tipe .. "] " .. lokasi .. g.pesan
+end
+
+-- Menganalisis log mentah (tabel baris) dan mengembalikan tabel hasil.
+PembuatAPK.analisisLog = function(mentah)
+    local b = {}
+    for i = 1, #mentah do b[i] = PembuatAPK.bersihkanBarisLog(mentah[i]) end
+
+    -- Cari awal dan akhir langkah yang gagal: dari "##[group]Run" terakhir sebelum "##[error]" pertama.
+    local idxGalat = nil
+    for i = 1, #b do
+        if b[i]:find("^##%[error%]") then
+            idxGalat = i
+            break
+        end
+    end
+    local mulai = 1
+    if idxGalat then
+        for i = idxGalat, 1, -1 do
+            if b[i]:find("^##%[group%]Run ") then
+                mulai = i
+                break
+            end
+        end
+    end
+    local akhir = idxGalat or #b
+    local wilayah = {}
+    for i = mulai, akhir do wilayah[#wilayah + 1] = b[i] end
+
+    local hasil = {
+        bersih = b,
+        wilayah = wilayah,
+        wilayahDitemukan = (idxGalat ~= nil),
+        tugas = nil,
+        galatKode = {},
+        galatLain = {},
+        blokGradle = {},
+        penyebab = {},
+    }
+
+    local terlihat = {}
+    local kataLain = {
+        "could not resolve", "could not find ", "caused by:", "duplicate class",
+        "manifest merger failed", "license for package", "sdk location not found",
+        "failed to install", "outofmemoryerror", "java heap space", "unsupported class file",
+        "invalid source release", "no such file", "permission denied", "script compilation error",
+        "could not get unknown property", "execution failed", "failed to find", "cannot find",
+        "berkas apk tidak ditemukan", "error:", "unzip:", "end-of-central-directory",
+    }
+
+    local n = #wilayah
+    local i = 1
+    while i <= n do
+        local l = wilayah[i]
+        local lower = l:lower()
+
+        local rest = l:match("^e: (.*)$")
+        if rest then
+            local f, ln, kol, ps = rest:match("^file:///(.-%.kts?):(%d+):(%d+)%s+(.*)$")
+            if not f then f, ln, kol, ps = rest:match("^file:///(.-%.kts?):%((%d+), (%d+)%):%s*(.*)$") end
+            if not f then f, ln, kol, ps = rest:match("^(.-%.kts?):%((%d+), (%d+)%):%s*(.*)$") end
+            local item
+            if f then
+                item = {tipe = "Kotlin", berkas = PembuatAPK.pendekkanJalur(f), baris = tonumber(ln), kolom = tonumber(kol), pesan = ps}
+            else
+                item = {tipe = "Kotlin", pesan = PembuatAPK.pangkasTeks(rest)}
+            end
+            local kunci = tostring(item.berkas) .. "|" .. tostring(item.baris) .. "|" .. tostring(item.kolom) .. "|" .. item.pesan
+            if not terlihat[kunci] and #hasil.galatKode < 300 then
+                terlihat[kunci] = true
+                hasil.galatKode[#hasil.galatKode + 1] = item
+            end
+        else
+            local jf, jl, jp = l:match("^(%S+%.java):(%d+): error: (.*)$")
+            if jf then
+                local pesan = jp
+                local s1 = wilayah[i + 1]
+                local s2 = wilayah[i + 2]
+                if s1 and s1 ~= "" and not s1:find("^%S+%.java:%d+:") then
+                    pesan = pesan .. "  |  " .. PembuatAPK.pangkasTeks(s1)
+                    if s2 and s2:find("^%s*%^") then i = i + 1 end
+                    i = i + 1
+                end
+                local item = {tipe = "Java", berkas = PembuatAPK.pendekkanJalur(jf), baris = tonumber(jl), pesan = pesan}
+                local kunci = tostring(item.berkas) .. "|" .. tostring(item.baris) .. "|" .. item.pesan
+                if not terlihat[kunci] and #hasil.galatKode < 300 then
+                    terlihat[kunci] = true
+                    hasil.galatKode[#hasil.galatKode + 1] = item
+                end
+            else
+                local tugas = l:match("^> Task (%S+) FAILED")
+                if tugas then hasil.tugas = tugas end
+                local tugas2 = l:match("Execution failed for task '([^']+)'")
+                if tugas2 and not hasil.tugas then hasil.tugas = tugas2 end
+
+                if l:find("* What went wrong:", 1, true) then
+                    local k = i + 1
+                    local dihitung = 0
+                    while k <= n and dihitung < 25 do
+                        local x = wilayah[k]
+                        if x:find("^%* Try:") or x:find("^%* Exception") or x:find("^%* Get more help") then break end
+                        if PembuatAPK.pangkasTeks(x) ~= "" then
+                            hasil.blokGradle[#hasil.blokGradle + 1] = x
+                            dihitung = dihitung + 1
+                        end
+                        k = k + 1
+                    end
+                elseif not l:find("^##%[error%]Process completed") and not l:find("^w: ") then
+                    for _, kata in ipairs(kataLain) do
+                        if lower:find(kata, 1, true) then
+                            local teks = PembuatAPK.pendekkanJalur(PembuatAPK.pangkasTeks(l))
+                            if teks ~= "" and not terlihat["L|" .. teks] and #hasil.galatLain < 60 then
+                                terlihat["L|" .. teks] = true
+                                hasil.galatLain[#hasil.galatLain + 1] = teks
+                            end
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        i = i + 1
+    end
+
+    -- Buang baris "lain" yang sudah tampil di blok pesan Gradle.
+    local dalamBlok = {}
+    for _, x in ipairs(hasil.blokGradle) do dalamBlok[PembuatAPK.pangkasTeks(x)] = true end
+    local sisa = {}
+    for _, x in ipairs(hasil.galatLain) do
+        if not dalamBlok[x] then sisa[#sisa + 1] = x end
+    end
+    hasil.galatLain = sisa
+
+    -- Penjelasan penyebab berdasarkan isi langkah yang gagal.
+    local teksKecil = table.concat(wilayah, "\n"):lower()
+    local sudahJelas = {}
+    for _, p in ipairs(PembuatAPK.DAFTAR_PENYEBAB) do
+        if teksKecil:find(p[1], 1, true) and not sudahJelas[p[2]] and #hasil.penyebab < 6 then
+            sudahJelas[p[2]] = true
+            hasil.penyebab[#hasil.penyebab + 1] = p[2]
+        end
+    end
+
+    return hasil
+end
+
+-- Menyusun teks laporan. batas = jumlah maksimum kesalahan kode yang ditampilkan (nil = semua).
+PembuatAPK.susunTeksAnalisis = function(a, header, batas)
+    local t = {}
+    t[#t + 1] = header
+    t[#t + 1] = ""
+    if a.tugas then t[#t + 1] = "Tugas Gradle yang gagal: " .. a.tugas end
+    t[#t + 1] = "Jumlah kesalahan kode: " .. tostring(#a.galatKode)
+
+    if #a.galatKode > 0 then
+        t[#t + 1] = ""
+        t[#t + 1] = "PENYEBAB UTAMA (kesalahan di kode)"
+        local tampil = #a.galatKode
+        if batas and tampil > batas then tampil = batas end
+        for k = 1, tampil do
+            t[#t + 1] = tostring(k) .. ". " .. PembuatAPK.formatGalatKode(a.galatKode[k])
+        end
+        if tampil < #a.galatKode then
+            t[#t + 1] = "(Hanya " .. tostring(tampil) .. " dari " .. tostring(#a.galatKode) .. " kesalahan yang ditampilkan di sini. Tekan \"salin semua kesalahan\" untuk daftar lengkap.)"
+        end
+    end
+
+    if #a.penyebab > 0 then
+        t[#t + 1] = ""
+        t[#t + 1] = "ARTINYA"
+        for _, p in ipairs(a.penyebab) do t[#t + 1] = "- " .. p end
+    end
+
+    if #a.blokGradle > 0 then
+        t[#t + 1] = ""
+        t[#t + 1] = "PESAN DARI GRADLE"
+        for _, x in ipairs(a.blokGradle) do t[#t + 1] = x end
+    end
+
+    if #a.galatLain > 0 then
+        t[#t + 1] = ""
+        t[#t + 1] = "BARIS KESALAHAN LAIN DI LOG"
+        local maks = #a.galatLain
+        if batas and maks > 12 then maks = 12 end
+        for k = 1, maks do t[#t + 1] = "- " .. a.galatLain[k] end
+        if maks < #a.galatLain then
+            t[#t + 1] = "(" .. tostring(#a.galatLain - maks) .. " baris lain ada di \"salin semua kesalahan\".)"
+        end
+    end
+
+    local adaTemuan = (#a.galatKode > 0) or (#a.galatLain > 0) or (#a.blokGradle > 0)
+    local jumlahAkhir = adaTemuan and 12 or 40
+    t[#t + 1] = ""
+    if adaTemuan then
+        t[#t + 1] = "BARIS TERAKHIR LANGKAH YANG GAGAL"
+    else
+        t[#t + 1] = "Tidak ada baris kesalahan yang dikenali otomatis. Berikut " .. tostring(jumlahAkhir) .. " baris terakhir langkah yang gagal:"
+    end
+    local w = a.wilayah
+    local kumpul = {}
+    for k = #w, 1, -1 do
+        if PembuatAPK.pangkasTeks(w[k]) ~= "" then
+            table.insert(kumpul, 1, w[k])
+            if #kumpul >= jumlahAkhir then break end
+        end
+    end
+    for _, x in ipairs(kumpul) do t[#t + 1] = x end
+
+    return table.concat(t, "\n")
+end
+
+-- Kalimat singkat untuk dibacakan pembaca layar.
+PembuatAPK.kalimatBicara = function(a, namaLangkah)
+    local s = "Langkah gagal: " .. tostring(namaLangkah) .. ". "
+    if #a.galatKode > 0 then
+        local g = a.galatKode[1]
+        s = s .. "Ditemukan " .. tostring(#a.galatKode) .. " kesalahan kode. Yang pertama: "
+        if g.berkas then
+            s = s .. "berkas " .. g.berkas
+            if g.baris then s = s .. " baris " .. tostring(g.baris) end
+            s = s .. ". "
+        end
+        s = s .. (g.pesan:gsub("%.+$", "")) .. ". "
+    elseif #a.penyebab > 0 then
+        s = s .. a.penyebab[1] .. " "
+    elseif #a.galatLain > 0 then
+        s = s .. "Pesan: " .. a.galatLain[1] .. ". "
+    else
+        s = s .. "Penyebab tidak dikenali otomatis. Log langkah gagal ditampilkan. "
+    end
+    s = s .. "Rincian lengkap ditampilkan, ada tombol salin."
+    return s
+end
+
 function PembuatAPK.bacaLogError(fullName, token, runId, logUrl, kb)
     local kembali = tetapkanKembali(fullName, token, kb)
     local progress = ProgressDialog(service)
@@ -3130,8 +3436,13 @@ function PembuatAPK.bacaLogError(fullName, token, runId, logUrl, kb)
                     local barisLog = {}
                     local l = reader.readLine()
                     while l ~= nil do
-                        table.insert(barisLog, tostring(l))
-                        if #barisLog > 3000 then table.remove(barisLog, 1) end
+                        barisLog[#barisLog + 1] = tostring(l)
+                        if #barisLog > 40000 then
+                            -- Log sangat besar: buang bagian paling awal, bagian akhir yang berisi kegagalan dipertahankan.
+                            local baru = {}
+                            for q = 10001, #barisLog do baru[#baru + 1] = barisLog[q] end
+                            barisLog = baru
+                        end
                         l = reader.readLine()
                     end
                     reader.close()
@@ -3150,50 +3461,38 @@ function PembuatAPK.bacaLogError(fullName, token, runId, logUrl, kb)
                             return
                         end
 
-                        local function bersihkan(baris)
-                            local c = baris:gsub("^%d%d%d%d%-%d%d%-%d%dT%d%d:%d%d:%d%d%.%d+Z%s*", "")
-                            return c
-                        end
+                        local okA, a = pcall(PembuatAPK.analisisLog, hasilLog)
+                        local teksRingkas, teksSemua, teksLangkah, teksAkhir, bicara
 
-                        local dipilih = {}
-                        for idx, baris in ipairs(hasilLog) do
-                            local lower = baris:lower()
-                            if lower:find("what went wrong") then
-                                for k = idx, math.min(#hasilLog, idx + 8) do dipilih[k] = true end
-                            elseif lower:find("error:") or lower:find("##%[error%]") or lower:find("failure:")
-                                or lower:find("failed") or lower:find("cannot find symbol") or lower:find("exception") then
-                                dipilih[idx] = true
+                        local function ambilAkhir(tabel, jumlah)
+                            local keluar = {}
+                            for q = math.max(1, #tabel - jumlah + 1), #tabel do
+                                keluar[#keluar + 1] = PembuatAPK.bersihkanBarisLog(tabel[q])
                             end
+                            return table.concat(keluar, "\n")
                         end
 
-                        local ringkasan = {}
-                        for i = 1, #hasilLog do
-                            if dipilih[i] then table.insert(ringkasan, bersihkan(hasilLog[i])) end
+                        if okA and a then
+                            teksRingkas = PembuatAPK.susunTeksAnalisis(a, header, 20)
+                            teksSemua = PembuatAPK.susunTeksAnalisis(a, header, nil)
+                            teksLangkah = header .. "\n\n--- Log langkah yang gagal ---\n" .. ambilAkhir(a.wilayah, 1500)
+                            bicara = PembuatAPK.kalimatBicara(a, namaLangkahGagal)
+                        else
+                            teksRingkas = header .. "\n\nAnalisis otomatis gagal: " .. tostring(a) ..
+                                "\n\n--- 60 baris terakhir log ---\n" .. ambilAkhir(hasilLog, 60)
+                            teksSemua = teksRingkas
+                            teksLangkah = teksRingkas
+                            bicara = "Langkah gagal: " .. namaLangkahGagal .. ". Analisis otomatis gagal, 60 baris terakhir log ditampilkan."
                         end
-                        if #ringkasan > 40 then
-                            local potong = {}
-                            for i = #ringkasan - 39, #ringkasan do table.insert(potong, ringkasan[i]) end
-                            ringkasan = potong
-                        end
-                        if #ringkasan == 0 then
-                            for i = math.max(1, #hasilLog - 29), #hasilLog do
-                                table.insert(ringkasan, bersihkan(hasilLog[i]))
-                            end
-                        end
+                        teksAkhir = header .. "\n\n--- Log (600 baris terakhir) ---\n" .. ambilAkhir(hasilLog, 600)
 
-                        local lengkap = {}
-                        for i = math.max(1, #hasilLog - 299), #hasilLog do
-                            table.insert(lengkap, bersihkan(hasilLog[i]))
-                        end
+                        if service.speak then service.speak(bicara) end
 
-                        local teksGabungan = header .. "\n\n--- Rincian Error ---\n" .. table.concat(ringkasan, "\n")
-                        local teksLengkap = header .. "\n\n--- Log (300 baris terakhir) ---\n" .. table.concat(lengkap, "\n")
-
-                        if service.speak then service.speak("Langkah gagal: " .. namaLangkahGagal .. ". Rincian error ditampilkan, ada tombol salin.") end
-
-                        PembuatAPK.dialogTombol("Hasil Analisis Error APK", teksGabungan, {
-                            {"salin keterangan error", function() salinKeClipboard("Keterangan error APK", teksGabungan) end, tetap = true},
-                            {"salin log lengkap", function() salinKeClipboard("Log lengkap APK", teksLengkap) end, tetap = true},
+                        PembuatAPK.dialogTombol("Hasil Analisis Error APK", teksRingkas, {
+                            {"salin ringkasan penyebab", function() salinKeClipboard("Ringkasan penyebab error APK", teksRingkas) end, tetap = true},
+                            {"salin semua kesalahan", function() salinKeClipboard("Semua kesalahan APK", teksSemua) end, tetap = true},
+                            {"salin log langkah yang gagal", function() salinKeClipboard("Log langkah gagal APK", teksLangkah) end, tetap = true},
+                            {"salin 600 baris terakhir log", function() salinKeClipboard("Log lengkap APK", teksAkhir) end, tetap = true},
                             {"buka log di web", function() bukaBrowser(logUrl) end},
                         }, {"kembali", kembali}, {ukuranTeks = 13})
                     end
