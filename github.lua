@@ -31,7 +31,7 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
-local VERSI_SAAT_INI = "1.26"
+local VERSI_SAAT_INI = "1.27"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 local infoScript = debug.getinfo(1, "S")
@@ -48,6 +48,7 @@ local buatRepoDialog, tambahFileRepoDialog, unggahDariMemoriHPDialog, konfirmUng
 local daftarRepoSayaDialog, cariRepoDialog, kelolaRepoPilihanDialog, ubahPrivasiRepoDialog
 local bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog, gantiNamaBerkasDialog, hapusRepoDialog
 local hapusSemuaIsiFolder
+local PilihBanyak = {}
 local cekPembaruan, prosesDownloadPembaruan, aktifkanGitHubPagesOtomatis
 local filterRepoDialog, multiSelectRepoDialog
 local Pengunduh, TandaTangan
@@ -1441,6 +1442,12 @@ unggahDariMemoriHPDialog = function(fullName, token, repoObj, pathSekarang, fold
             table.insert(menuItems, "Berkas " .. f.getName() .. " (" .. sz .. ")")
             table.insert(dataItems, {tipe = "file", file = f})
         end
+
+        if #daftarBerkas > 0 then
+            local posisiBanyak = (pathSekarang ~= rootPath and pathSekarang ~= "/") and 2 or 1
+            table.insert(menuItems, posisiBanyak, "Pilih banyak berkas (centang) untuk diunggah sekaligus")
+            table.insert(dataItems, posisiBanyak, {tipe = "banyak"})
+        end
     end
 
     local b = AlertDialog.Builder(service)
@@ -1455,6 +1462,8 @@ unggahDariMemoriHPDialog = function(fullName, token, repoObj, pathSekarang, fold
                     unggahDariMemoriHPDialog(fullName, token, repoObj, item.path or rootPath, folderRepo)
                 elseif item.tipe == "dir" then
                     unggahDariMemoriHPDialog(fullName, token, repoObj, item.file.getAbsolutePath(), folderRepo)
+                elseif item.tipe == "banyak" then
+                    PilihBanyak.pilihHP(fullName, token, repoObj, pathSekarang, folderRepo, {}, nil)
                 elseif item.tipe == "file" then
                     konfirmUnggahBerkasDialog(fullName, token, repoObj, pathSekarang, item.file, folderRepo)
                 end
@@ -1475,6 +1484,23 @@ unggahDariMemoriHPDialog = function(fullName, token, repoObj, pathSekarang, fold
     diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
     diag.show()
     aturTombolHurufKecil(diag, nil, "kembali", nil)
+
+    -- Tekan tahan sebuah berkas: langsung masuk mode centang banyak berkas dengan berkas itu tercentang.
+    pcall(function()
+        diag.getListView().setOnItemLongClickListener(AdapterView.OnItemLongClickListener{
+            onItemLongClick = function(parent, view, position, id)
+                local item = dataItems[position + 1]
+                if item and item.tipe == "file" then
+                    local peta = {}
+                    peta[tostring(item.file.getAbsolutePath())] = item.file
+                    pcall(function() diag.dismiss() end)
+                    PilihBanyak.pilihHP(fullName, token, repoObj, pathSekarang, folderRepo, peta, nil)
+                    if service.speak then service.speak("Mode pilih banyak. " .. tostring(item.file.getName()) .. " dicentang") end
+                end
+                return true
+            end
+        })
+    end)
 end
 
 hapusRepoDialog = function(repoObj, token)
@@ -1713,7 +1739,11 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
         table.insert(dataItems, {tipe = "unggah_di_sini"})
         table.insert(menuItems, "Tambah berkas teks baru di folder ini")
         table.insert(dataItems, {tipe = "tambah_di_sini"})
+        table.insert(menuItems, "Buat folder baru di sini")
+        table.insert(dataItems, {tipe = "buat_folder"})
         if adaIsi then
+            table.insert(menuItems, "Pilih berkas atau folder untuk dihapus (centang)")
+            table.insert(dataItems, {tipe = "pilih_hapus"})
             table.insert(menuItems, "Hapus semua berkas di folder ini")
             table.insert(dataItems, {tipe = "hapus_semua"})
         end
@@ -1737,6 +1767,10 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
                             tostring(Environment.getExternalStorageDirectory().getAbsolutePath()), currentPath)
                     elseif data.tipe == "tambah_di_sini" then
                         tambahFileRepoDialog(token, fullName, repoObj, currentPath)
+                    elseif data.tipe == "buat_folder" then
+                        PilihBanyak.buatFolder(fullName, currentPath, token, repoObj, nil)
+                    elseif data.tipe == "pilih_hapus" then
+                        PilihBanyak.pilihHapus(fullName, currentPath, token, repoObj, PilihBanyak.itemNyata(dataItems), {}, nil)
                     elseif data.tipe == "hapus_semua" then
                         local lokasi = (currentPath == "") and ("seluruh repositori " .. repoObj.optString("name", "")) or ("folder " .. currentPath)
                         local kembaliKeFolder = DialogInterface.OnClickListener{
@@ -1787,12 +1821,29 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
         diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
         diag.show()
         aturTombolHurufKecil(diag, nil, "kembali", nil)
+
+        -- Tekan tahan folder atau berkas: langsung masuk mode centang dengan item itu tercentang.
+        pcall(function()
+            diag.getListView().setOnItemLongClickListener(AdapterView.OnItemLongClickListener{
+                onItemLongClick = function(parent, view, position, id)
+                    local d = dataItems[position + 1]
+                    if d and d.path and d.path ~= "" and d.tipe ~= "submodule" and d.name then
+                        local peta = {}
+                        peta[d.path] = true
+                        pcall(function() diag.dismiss() end)
+                        PilihBanyak.pilihHapus(fullName, currentPath, token, repoObj, PilihBanyak.itemNyata(dataItems), peta, nil)
+                        if service.speak then service.speak("Mode pilih aktif. " .. d.name .. " dicentang") end
+                    end
+                    return true
+                end
+            })
+        end)
     end)
 end
 
-hapusSemuaIsiFolder = function(fullName, currentPath, token, repoObj)
+hapusSemuaIsiFolder = function(fullName, currentPath, token, repoObj, pilihan)
     local progress = ProgressDialog(service)
-    progress.setTitle("Hapus semua berkas")
+    progress.setTitle(pilihan and "Hapus yang dicentang" or "Hapus semua berkas")
     progress.setMessage("Menghitung berkas yang akan dihapus...")
     progress.setCancelable(false)
     progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
@@ -1807,7 +1858,18 @@ hapusSemuaIsiFolder = function(fullName, currentPath, token, repoObj)
     end
 
     local daftar = {}
-    local antrean = {currentPath}
+    local antrean = {}
+    if pilihan then
+        for _, pi in ipairs(pilihan) do
+            if pi.tipe == "dir" then
+                table.insert(antrean, pi.path)
+            else
+                table.insert(daftar, {path = pi.path, sha = pi.sha, nama = pi.name})
+            end
+        end
+    else
+        antrean = {currentPath}
+    end
 
     local function mulaiHapus()
         local total = #daftar
@@ -1828,10 +1890,12 @@ hapusSemuaIsiFolder = function(fullName, currentPath, token, repoObj)
                 if gagal > 0 then
                     pesan = pesan .. " " .. gagal .. " berkas gagal dihapus. Galat terakhir: " .. galatTerakhir
                 end
-                pesan = pesan .. " Bila masih ada sisa, pilih hapus semua sekali lagi."
+                if not pilihan then
+                    pesan = pesan .. " Bila masih ada sisa, pilih hapus semua sekali lagi."
+                end
                 if service.speak then service.speak(pesan) end
                 local d = AlertDialog.Builder(service)
-                d.setTitle("Hapus semua selesai")
+                d.setTitle(pilihan and "Hapus yang dicentang selesai" or "Hapus semua selesai")
                 d.setMessage(pesan)
                 d.setPositiveButton("oke", DialogInterface.OnClickListener{
                     onClick = function() kembaliKeFolder() end
@@ -1906,6 +1970,454 @@ hapusSemuaIsiFolder = function(fullName, currentPath, token, repoObj)
     end
 
     kumpul()
+end
+
+-- ===== Buat folder, unggah banyak berkas dari HP, dan hapus berkas/folder yang dicentang =====
+
+function PilihBanyak.tampilPesan(judul, pesan, kembali)
+    if service.speak then service.speak(tostring(pesan):sub(1, 300)) end
+    local d = AlertDialog.Builder(service)
+    d.setTitle(judul)
+    d.setMessage(pesan)
+    d.setCancelable(false)
+    d.setPositiveButton("oke", DialogInterface.OnClickListener{
+        onClick = function() if kembali then kembali() end end
+    })
+    local diag = d.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.show()
+    aturTombolHurufKecil(diag, "oke", nil, nil)
+end
+
+function PilihBanyak.hitung(peta)
+    local n = 0
+    for _ in pairs(peta) do n = n + 1 end
+    return n
+end
+
+-- Buat folder baru. GitHub tidak punya folder kosong, jadi folder dibuat lewat berkas penanda .gitkeep di dalamnya.
+function PilihBanyak.buatFolder(fullName, currentPath, token, repoObj, namaAwal)
+    local kembali = function() bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj) end
+
+    local layout = LinearLayout(service)
+    layout.setOrientation(LinearLayout.VERTICAL)
+    layout.setPadding(40, 20, 40, 10)
+    local lbl = TextView(service)
+    lbl.setText("Nama folder baru (boleh bertingkat, contoh: app/src/main). Folder dibuat lewat berkas penanda .gitkeep di dalamnya, karena GitHub tidak menyimpan folder kosong.")
+    layout.addView(lbl)
+    local input = EditText(service)
+    input.setSingleLine(true)
+    if namaAwal then input.setText(namaAwal) end
+    layout.addView(input)
+    local scroll = ScrollView(service.getApplicationContext())
+    scroll.setFillViewport(true)
+    scroll.addView(layout)
+
+    local b = AlertDialog.Builder(service)
+    b.setTitle("Buat folder baru")
+    b.setView(scroll)
+    b.setPositiveButton("buat folder", DialogInterface.OnClickListener{
+        onClick = function()
+            local nama = tostring(input.getText()):match("^%s*(.-)%s*$")
+            nama = (nama:gsub("^/+", ""))
+            nama = (nama:gsub("/+$", ""))
+            local pesanSalah = nil
+            if nama == "" then
+                pesanSalah = "Nama folder wajib diisi."
+            else
+                for seg in nama:gmatch("[^/]+") do
+                    local sg = seg:match("^%s*(.-)%s*$")
+                    if sg == "" or sg == "." or sg == ".." or sg:lower() == ".git" then
+                        pesanSalah = "Nama folder tidak valid: " .. seg
+                        break
+                    end
+                end
+            end
+            if pesanSalah then
+                if service.speak then service.speak(pesanSalah) end
+                Toast.makeText(service, pesanSalah, Toast.LENGTH_LONG).show()
+                PilihBanyak.buatFolder(fullName, currentPath, token, repoObj, nama)
+                return
+            end
+
+            local jalur = (currentPath == "") and nama or (currentPath .. "/" .. nama)
+            local payload = JSONObject()
+            payload.put("message", "Buat folder " .. jalur)
+            payload.put("content", Base64.encodeToString(String("\n").getBytes("UTF-8"), Base64.NO_WRAP))
+            local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. enkodeJalur(jalur .. "/.gitkeep")
+            kirimPermintaanGitHub("PUT", endpoint, token, payload.toString(), function(ok, res)
+                if ok then
+                    if service.speak then service.speak("Folder " .. nama .. " berhasil dibuat.") end
+                    Toast.makeText(service, "Folder " .. nama .. " dibuat!", Toast.LENGTH_SHORT).show()
+                    bukaDirektoriRepoDialog(fullName, jalur, token, repoObj)
+                else
+                    local rincian = tostring(res)
+                    if rincian:find("422", 1, true) then
+                        rincian = rincian .. "\n(Kemungkinan folder ini sudah ada.)"
+                    end
+                    PilihBanyak.tampilPesan("Gagal membuat folder", rincian, function()
+                        PilihBanyak.buatFolder(fullName, currentPath, token, repoObj, nama)
+                    end)
+                end
+            end)
+        end
+    })
+    b.setNegativeButton("batal", DialogInterface.OnClickListener{
+        onClick = function() kembali() end
+    })
+    local diag = b.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+    diag.show()
+    aturTombolHurufKecil(diag, "buat folder", "batal", nil)
+end
+
+-- ---------- Hapus yang dicentang ----------
+
+-- Ambil item repo yang benar-benar berisi berkas/folder (bukan menu aksi).
+function PilihBanyak.itemNyata(dataItems)
+    local hasil = {}
+    for _, d in ipairs(dataItems) do
+        if d.path and d.path ~= "" and d.tipe ~= "submodule" and d.name then
+            table.insert(hasil, d)
+        end
+    end
+    return hasil
+end
+
+function PilihBanyak.pilihHapus(fullName, currentPath, token, repoObj, daftar, peta, posisi)
+    local kembali = function() bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj) end
+    local labels = {}
+    local jumlah = 0
+    for _, d in ipairs(daftar) do
+        local on = (peta[d.path] == true)
+        if on then jumlah = jumlah + 1 end
+        local label = ((d.tipe == "dir") and "Folder " or "Berkas ") .. d.name
+        if d.tipe ~= "dir" then label = label .. ", " .. formatUkuranBerkas(d.size or 0) end
+        table.insert(labels, label .. ", " .. (on and "dicentang" or "tidak dicentang"))
+    end
+    local semuaOn = (#daftar > 0 and jumlah == #daftar)
+
+    local b = AlertDialog.Builder(service)
+    b.setTitle("Pilih untuk dihapus (" .. jumlah .. " dicentang)")
+    b.setItems(labels, DialogInterface.OnClickListener{
+        onClick = function(dialog, which)
+            local d = daftar[which + 1]
+            if peta[d.path] then peta[d.path] = nil else peta[d.path] = true end
+            if service.speak then
+                service.speak(d.name .. (peta[d.path] and " dicentang" or " tidak dicentang"))
+            end
+            PilihBanyak.pilihHapus(fullName, currentPath, token, repoObj, daftar, peta, which)
+        end
+    })
+    b.setPositiveButton("hapus yang dicentang", DialogInterface.OnClickListener{
+        onClick = function()
+            PilihBanyak.konfirmasiHapus(fullName, currentPath, token, repoObj, daftar, peta)
+        end
+    })
+    b.setNeutralButton(semuaOn and "hapus centang semua" or "pilih semua", DialogInterface.OnClickListener{
+        onClick = function()
+            if semuaOn then
+                for _, d in ipairs(daftar) do peta[d.path] = nil end
+            else
+                for _, d in ipairs(daftar) do peta[d.path] = true end
+            end
+            PilihBanyak.pilihHapus(fullName, currentPath, token, repoObj, daftar, peta, nil)
+        end
+    })
+    b.setNegativeButton("batal", DialogInterface.OnClickListener{
+        onClick = function() kembali() end
+    })
+    local diag = b.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.show()
+    aturTombolHurufKecil(diag, "hapus yang dicentang", "batal", semuaOn and "hapus centang semua" or "pilih semua")
+    if posisi then
+        pcall(function() diag.getListView().setSelection(posisi) end)
+    end
+end
+
+function PilihBanyak.konfirmasiHapus(fullName, currentPath, token, repoObj, daftar, peta)
+    local terpilih, nama = {}, {}
+    local nFolder, nBerkas = 0, 0
+    for _, d in ipairs(daftar) do
+        if peta[d.path] then
+            table.insert(terpilih, d)
+            if d.tipe == "dir" then nFolder = nFolder + 1 else nBerkas = nBerkas + 1 end
+            if #nama < 15 then
+                table.insert(nama, ((d.tipe == "dir") and "Folder " or "Berkas ") .. d.name)
+            end
+        end
+    end
+    if #terpilih == 0 then
+        Toast.makeText(service, "Belum ada yang dicentang.", Toast.LENGTH_SHORT).show()
+        PilihBanyak.pilihHapus(fullName, currentPath, token, repoObj, daftar, peta, nil)
+        return
+    end
+
+    local lokasi = (currentPath == "") and ("seluruh repositori " .. repoObj.optString("name", "")) or ("folder " .. currentPath)
+    local pesan = nBerkas .. " berkas dan " .. nFolder .. " folder akan dihapus dari " .. lokasi .. ":\n\n" .. table.concat(nama, "\n")
+    if #terpilih > #nama then
+        pesan = pesan .. "\n...dan " .. (#terpilih - #nama) .. " lainnya"
+    end
+    pesan = pesan .. "\n\nIsi folder yang dicentang ikut terhapus. Setiap berkas dihapus lewat satu komit di GitHub dan tidak bisa dibatalkan dari skrip ini."
+
+    local k = AlertDialog.Builder(service)
+    k.setTitle("Hapus yang dicentang?")
+    k.setMessage(pesan)
+    k.setPositiveButton("hapus", DialogInterface.OnClickListener{
+        onClick = function()
+            hapusSemuaIsiFolder(fullName, currentPath, token, repoObj, terpilih)
+        end
+    })
+    k.setNegativeButton("kembali", DialogInterface.OnClickListener{
+        onClick = function()
+            PilihBanyak.pilihHapus(fullName, currentPath, token, repoObj, daftar, peta, nil)
+        end
+    })
+    local dK = k.create()
+    dK.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    dK.show()
+    aturTombolHurufKecil(dK, "hapus", "kembali", nil)
+end
+
+-- ---------- Unggah banyak berkas dari HP ----------
+
+-- peta: jalur mutlak di HP -> objek File yang dicentang (tetap tersimpan saat pindah folder).
+function PilihBanyak.pilihHP(fullName, token, repoObj, pathHP, folderRepo, peta, posisi)
+    local dir = File(pathHP)
+    local files = dir.listFiles()
+    local rootPath = Environment.getExternalStorageDirectory().getAbsolutePath()
+    local labels, dataItems = {}, {}
+    local berkasDiSini = {}
+
+    if pathHP ~= rootPath and pathHP ~= "/" then
+        table.insert(labels, "Folder .. (kembali ke folder sebelumnya)")
+        table.insert(dataItems, {tipe = "kembali", path = dir.getParent()})
+    end
+
+    if files ~= nil then
+        local daftarFolder, daftarBerkas = {}, {}
+        for i = 0, #files - 1 do
+            local f = files[i]
+            if not f.getName():find("^%.") then
+                if f.isDirectory() then table.insert(daftarFolder, f) else table.insert(daftarBerkas, f) end
+            end
+        end
+        table.sort(daftarFolder, function(a, b) return a.getName():lower() < b.getName():lower() end)
+        table.sort(daftarBerkas, function(a, b) return a.getName():lower() < b.getName():lower() end)
+
+        for _, f in ipairs(daftarFolder) do
+            table.insert(labels, "Folder " .. f.getName())
+            table.insert(dataItems, {tipe = "dir", file = f})
+        end
+        for _, f in ipairs(daftarBerkas) do
+            local on = (peta[tostring(f.getAbsolutePath())] ~= nil)
+            table.insert(labels, "Berkas " .. f.getName() .. " (" .. formatUkuranBerkas(f.length()) .. "), " .. (on and "dicentang" or "tidak dicentang"))
+            table.insert(dataItems, {tipe = "file", file = f})
+            table.insert(berkasDiSini, f)
+        end
+    end
+
+    local jumlah = PilihBanyak.hitung(peta)
+    local semuaDiSiniOn = (#berkasDiSini > 0)
+    for _, f in ipairs(berkasDiSini) do
+        if peta[tostring(f.getAbsolutePath())] == nil then semuaDiSiniOn = false end
+    end
+    local teksNetral = semuaDiSiniOn and "hapus centang di sini" or "pilih semua berkas di sini"
+
+    local b = AlertDialog.Builder(service)
+    b.setTitle("Pilih banyak dari HP: " .. dir.getName() .. " (" .. jumlah .. " dicentang)")
+    if #labels == 0 then
+        b.setMessage("Folder ini kosong.")
+    else
+        b.setItems(labels, DialogInterface.OnClickListener{
+            onClick = function(dialog, which)
+                local item = dataItems[which + 1]
+                if item.tipe == "kembali" then
+                    PilihBanyak.pilihHP(fullName, token, repoObj, item.path or rootPath, folderRepo, peta, nil)
+                elseif item.tipe == "dir" then
+                    PilihBanyak.pilihHP(fullName, token, repoObj, item.file.getAbsolutePath(), folderRepo, peta, nil)
+                elseif item.tipe == "file" then
+                    local kunci = tostring(item.file.getAbsolutePath())
+                    if peta[kunci] ~= nil then peta[kunci] = nil else peta[kunci] = item.file end
+                    if service.speak then
+                        service.speak(tostring(item.file.getName()) .. (peta[kunci] ~= nil and " dicentang" or " tidak dicentang"))
+                    end
+                    PilihBanyak.pilihHP(fullName, token, repoObj, pathHP, folderRepo, peta, which)
+                end
+            end
+        })
+    end
+    b.setPositiveButton("unggah (" .. jumlah .. ")", DialogInterface.OnClickListener{
+        onClick = function()
+            PilihBanyak.konfirmasiUnggah(fullName, token, repoObj, pathHP, folderRepo, peta)
+        end
+    })
+    b.setNeutralButton(teksNetral, DialogInterface.OnClickListener{
+        onClick = function()
+            for _, f in ipairs(berkasDiSini) do
+                local kunci = tostring(f.getAbsolutePath())
+                if semuaDiSiniOn then peta[kunci] = nil else peta[kunci] = f end
+            end
+            PilihBanyak.pilihHP(fullName, token, repoObj, pathHP, folderRepo, peta, nil)
+        end
+    })
+    b.setNegativeButton("kembali", DialogInterface.OnClickListener{
+        onClick = function()
+            unggahDariMemoriHPDialog(fullName, token, repoObj, pathHP, folderRepo)
+        end
+    })
+    local diag = b.create()
+    diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    diag.show()
+    aturTombolHurufKecil(diag, "unggah (" .. jumlah .. ")", "kembali", teksNetral)
+    if posisi then
+        pcall(function() diag.getListView().setSelection(posisi) end)
+    end
+end
+
+function PilihBanyak.konfirmasiUnggah(fullName, token, repoObj, pathHP, folderRepo, peta)
+    local berkas = {}
+    local totalByte = 0
+    for _, f in pairs(peta) do
+        table.insert(berkas, f)
+        totalByte = totalByte + f.length()
+    end
+    if #berkas == 0 then
+        Toast.makeText(service, "Belum ada berkas yang dicentang.", Toast.LENGTH_SHORT).show()
+        PilihBanyak.pilihHP(fullName, token, repoObj, pathHP, folderRepo, peta, nil)
+        return
+    end
+    table.sort(berkas, function(a, b) return a.getName():lower() < b.getName():lower() end)
+
+    local tujuan = folderRepo or ""
+    local teksTujuan = (tujuan == "") and "folder utama repositori" or ("folder " .. tujuan)
+    local pesan = #berkas .. " berkas (total " .. formatUkuranBerkas(totalByte) .. ") akan diunggah ke " .. teksTujuan ..
+        " di " .. fullName .. ". Berkas bernama sama yang sudah ada akan diganti. Berkas lebih dari 20 MB dilewati." ..
+        " Setiap berkas menjadi satu komit di GitHub, jadi jika repo ini membangun APK otomatis setiap ada perubahan, bisa terpicu beberapa pembangunan."
+
+    local k = AlertDialog.Builder(service)
+    k.setTitle("Unggah " .. #berkas .. " berkas?")
+    k.setMessage(pesan)
+    k.setPositiveButton("unggah semua", DialogInterface.OnClickListener{
+        onClick = function()
+            PilihBanyak.jalankanUnggah(fullName, token, repoObj, folderRepo, berkas)
+        end
+    })
+    k.setNegativeButton("kembali", DialogInterface.OnClickListener{
+        onClick = function()
+            PilihBanyak.pilihHP(fullName, token, repoObj, pathHP, folderRepo, peta, nil)
+        end
+    })
+    local dK = k.create()
+    dK.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    dK.show()
+    aturTombolHurufKecil(dK, "unggah semua", "kembali", nil)
+end
+
+function PilihBanyak.jalankanUnggah(fullName, token, repoObj, folderRepo, berkas)
+    local total = #berkas
+    local tujuan = folderRepo or ""
+    local batal = false
+    local berhasil, diganti = 0, 0
+    local gagal = {}
+
+    local kembaliRepo = function()
+        if folderRepo then
+            bukaDirektoriRepoDialog(fullName, folderRepo, token, repoObj)
+        else
+            kelolaRepoPilihanDialog(repoObj, token)
+        end
+    end
+
+    local progress = ProgressDialog(service)
+    progress.setTitle("Unggah banyak berkas")
+    progress.setMessage("Mulai mengunggah " .. total .. " berkas...")
+    progress.setCancelable(false)
+    pcall(function()
+        progress.setButton(DialogInterface.BUTTON_NEGATIVE, "batalkan", DialogInterface.OnClickListener{
+            onClick = function()
+                batal = true
+                Toast.makeText(service, "Unggahan berhenti setelah berkas yang sedang berjalan selesai.", Toast.LENGTH_LONG).show()
+            end
+        })
+    end)
+    progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    progress.show()
+    if service.speak then service.speak("Mulai mengunggah " .. total .. " berkas. Mohon tunggu.") end
+
+    local function selesai()
+        pcall(function() progress.dismiss() end)
+        local pesan = "Berhasil " .. berhasil .. " dari " .. total .. " berkas"
+        if diganti > 0 then pesan = pesan .. " (" .. diganti .. " menggantikan berkas lama)" end
+        pesan = pesan .. "."
+        if batal then pesan = pesan .. " Unggahan dibatalkan sebelum semua berkas selesai." end
+        if #gagal > 0 then
+            pesan = pesan .. "\n\nGagal " .. #gagal .. " berkas:\n" .. table.concat(gagal, "\n")
+        end
+        pesan = pesan .. "\n\nTujuan: " .. ((tujuan == "") and "folder utama repositori" or tujuan)
+        PilihBanyak.tampilPesan("Unggahan selesai", pesan, kembaliRepo)
+    end
+
+    local kerjakan
+    kerjakan = function(i)
+        if i > total or batal then
+            selesai()
+            return
+        end
+        local f = berkas[i]
+        local nama = tostring(f.getName())
+        pcall(function() progress.setMessage("Mengunggah " .. i .. " dari " .. total .. ":\n" .. nama) end)
+
+        if f.length() > BATAS_UNGGAH_BYTE then
+            table.insert(gagal, nama .. " (lebih dari 20 MB)")
+            kerjakan(i + 1)
+            return
+        end
+        local okB64, b64 = pcall(function() return bacaBerkasKeBase64(f) end)
+        if not okB64 then
+            table.insert(gagal, nama .. " (gagal dibaca)")
+            kerjakan(i + 1)
+            return
+        end
+
+        local jalur = (tujuan == "") and nama or (tujuan .. "/" .. nama)
+        local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. enkodeJalur(jalur)
+
+        local function kirim(shaLama, percobaan)
+            local payload = JSONObject()
+            payload.put("message", (shaLama and "Perbarui " or "Unggah ") .. jalur .. " dari HP")
+            payload.put("content", b64)
+            if shaLama then payload.put("sha", shaLama) end
+            kirimPermintaanGitHub("PUT", endpoint, token, payload.toString(), function(ok, res)
+                if ok then
+                    berhasil = berhasil + 1
+                    if shaLama then diganti = diganti + 1 end
+                    kerjakan(i + 1)
+                elseif tostring(res):find("Kode: 409", 1, true) and percobaan < 3 then
+                    -- 409 = komit lain sedang berjalan di GitHub; coba lagi sebentar kemudian.
+                    mainHandler.postDelayed(Runnable{
+                        run = function() kirim(shaLama, percobaan + 1) end
+                    }, 1500 * percobaan)
+                else
+                    table.insert(gagal, nama .. " (" .. tostring(res):sub(1, 120) .. ")")
+                    kerjakan(i + 1)
+                end
+            end, true)
+        end
+
+        kirimPermintaanGitHub("GET", endpoint, token, nil, function(ada, resGet)
+            local shaLama = nil
+            if ada then
+                pcall(function() shaLama = JSONObject(resGet).optString("sha", "") end)
+                if shaLama == "" then shaLama = nil end
+            end
+            kirim(shaLama, 1)
+        end, true)
+    end
+
+    kerjakan(1)
 end
 
 menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
