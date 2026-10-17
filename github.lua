@@ -31,7 +31,7 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
-local VERSI_SAAT_INI = "1.25"
+local VERSI_SAAT_INI = "1.26"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 
 local infoScript = debug.getinfo(1, "S")
@@ -47,6 +47,7 @@ local PembuatAPK
 local buatRepoDialog, tambahFileRepoDialog, unggahDariMemoriHPDialog, konfirmUnggahBerkasDialog
 local daftarRepoSayaDialog, cariRepoDialog, kelolaRepoPilihanDialog, ubahPrivasiRepoDialog
 local bukaDirektoriRepoDialog, menuAksiFile, formEditIsiBerkas, gantiNamaRepoDialog, gantiNamaBerkasDialog, hapusRepoDialog
+local hapusSemuaIsiFolder
 local cekPembaruan, prosesDownloadPembaruan, aktifkanGitHubPagesOtomatis
 local filterRepoDialog, multiSelectRepoDialog
 local Pengunduh, TandaTangan
@@ -1712,6 +1713,10 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
         table.insert(dataItems, {tipe = "unggah_di_sini"})
         table.insert(menuItems, "Tambah berkas teks baru di folder ini")
         table.insert(dataItems, {tipe = "tambah_di_sini"})
+        if adaIsi then
+            table.insert(menuItems, "Hapus semua berkas di folder ini")
+            table.insert(dataItems, {tipe = "hapus_semua"})
+        end
 
         local judul = (currentPath == "") and ("Berkas: " .. repoObj.optString("name", "")) or ("Folder: " .. currentPath)
         if not adaIsi then judul = judul .. " (folder ini kosong)" end
@@ -1732,6 +1737,34 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
                             tostring(Environment.getExternalStorageDirectory().getAbsolutePath()), currentPath)
                     elseif data.tipe == "tambah_di_sini" then
                         tambahFileRepoDialog(token, fullName, repoObj, currentPath)
+                    elseif data.tipe == "hapus_semua" then
+                        local lokasi = (currentPath == "") and ("seluruh repositori " .. repoObj.optString("name", "")) or ("folder " .. currentPath)
+                        local kembaliKeFolder = DialogInterface.OnClickListener{
+                            onClick = function() bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj) end
+                        }
+                        local k1 = AlertDialog.Builder(service)
+                        k1.setTitle("Hapus semua berkas?")
+                        k1.setMessage("Semua berkas dan folder di dalam " .. lokasi .. " akan dihapus, termasuk isi semua subfolder. Lanjutkan?")
+                        k1.setPositiveButton("lanjut", DialogInterface.OnClickListener{
+                            onClick = function()
+                                local k2 = AlertDialog.Builder(service)
+                                k2.setTitle("Yakin hapus semua?")
+                                k2.setMessage("Ini penghapusan terakhir untuk " .. lokasi .. ". Setiap berkas dihapus lewat satu komit di GitHub dan tidak bisa dibatalkan dari skrip ini.")
+                                k2.setPositiveButton("hapus semua", DialogInterface.OnClickListener{
+                                    onClick = function() hapusSemuaIsiFolder(fullName, currentPath, token, repoObj) end
+                                })
+                                k2.setNegativeButton("batal", kembaliKeFolder)
+                                local dK2 = k2.create()
+                                dK2.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+                                dK2.show()
+                                aturTombolHurufKecil(dK2, "hapus semua", "batal", nil)
+                            end
+                        })
+                        k1.setNegativeButton("batal", kembaliKeFolder)
+                        local dK1 = k1.create()
+                        dK1.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+                        dK1.show()
+                        aturTombolHurufKecil(dK1, "lanjut", "batal", nil)
                     else
                         menuAksiFile(fullName, data, token, currentPath, repoObj)
                     end
@@ -1755,6 +1788,124 @@ bukaDirektoriRepoDialog = function(fullName, currentPath, token, repoObj)
         diag.show()
         aturTombolHurufKecil(diag, nil, "kembali", nil)
     end)
+end
+
+hapusSemuaIsiFolder = function(fullName, currentPath, token, repoObj)
+    local progress = ProgressDialog(service)
+    progress.setTitle("Hapus semua berkas")
+    progress.setMessage("Menghitung berkas yang akan dihapus...")
+    progress.setCancelable(false)
+    progress.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+    progress.show()
+
+    local function tutup()
+        pcall(function() progress.dismiss() end)
+    end
+
+    local function kembaliKeFolder()
+        bukaDirektoriRepoDialog(fullName, currentPath, token, repoObj)
+    end
+
+    local daftar = {}
+    local antrean = {currentPath}
+
+    local function mulaiHapus()
+        local total = #daftar
+        if total == 0 then
+            tutup()
+            Toast.makeText(service, "Tidak ada berkas untuk dihapus.", Toast.LENGTH_SHORT).show()
+            kembaliKeFolder()
+            return
+        end
+        if service.speak then service.speak("Menghapus " .. total .. " berkas. Mohon tunggu.") end
+
+        local berhasil, gagal, galatTerakhir = 0, 0, ""
+
+        local function hapusKe(i, percobaan)
+            if i > total then
+                tutup()
+                local pesan = "Selesai. " .. berhasil .. " berkas dihapus."
+                if gagal > 0 then
+                    pesan = pesan .. " " .. gagal .. " berkas gagal dihapus. Galat terakhir: " .. galatTerakhir
+                end
+                pesan = pesan .. " Bila masih ada sisa, pilih hapus semua sekali lagi."
+                if service.speak then service.speak(pesan) end
+                local d = AlertDialog.Builder(service)
+                d.setTitle("Hapus semua selesai")
+                d.setMessage(pesan)
+                d.setPositiveButton("oke", DialogInterface.OnClickListener{
+                    onClick = function() kembaliKeFolder() end
+                })
+                d.setCancelable(false)
+                local diag = d.create()
+                diag.getWindow().setType(WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY)
+                diag.show()
+                aturTombolHurufKecil(diag, "oke", nil, nil)
+                return
+            end
+
+            local f = daftar[i]
+            pcall(function()
+                progress.setMessage("Menghapus " .. i .. " dari " .. total .. ": " .. f.nama)
+            end)
+
+            local payload = JSONObject()
+            payload.put("message", "Hapus " .. f.path .. " [skip ci]")
+            payload.put("sha", f.sha)
+            local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents/" .. enkodeJalur(f.path)
+            kirimPermintaanGitHub("DELETE", endpoint, token, payload.toString(), function(ok, res)
+                if ok then
+                    berhasil = berhasil + 1
+                    hapusKe(i + 1, 1)
+                elseif tostring(res):find("Kode: 409", 1, true) and percobaan < 3 then
+                    -- 409 = komit lain sedang berjalan di GitHub; coba lagi sebentar kemudian.
+                    mainHandler.postDelayed(Runnable{
+                        run = function() hapusKe(i, percobaan + 1) end
+                    }, 1500 * percobaan)
+                else
+                    gagal = gagal + 1
+                    galatTerakhir = tostring(res)
+                    hapusKe(i + 1, 1)
+                end
+            end, true)
+        end
+
+        hapusKe(1, 1)
+    end
+
+    local function kumpul()
+        if #antrean == 0 then
+            mulaiHapus()
+            return
+        end
+        local p = table.remove(antrean, 1)
+        local endpoint = "https://api.github.com/repos/" .. fullName .. "/contents"
+        if p ~= "" then endpoint = endpoint .. "/" .. enkodeJalur(p) end
+        kirimPermintaanGitHub("GET", endpoint, token, nil, function(ok, res)
+            if not ok then
+                tutup()
+                Toast.makeText(service, "Gagal membaca " .. ((p == "") and "folder utama" or p) .. ": " .. tostring(res), Toast.LENGTH_LONG).show()
+                kembaliKeFolder()
+                return
+            end
+            local okParse, arr = pcall(function() return JSONArray(res) end)
+            if okParse and arr then
+                for i = 0, arr.length() - 1 do
+                    local it = arr.getJSONObject(i)
+                    local tipe = it.optString("type", "")
+                    local jalur = it.optString("path", "")
+                    if tipe == "dir" then
+                        table.insert(antrean, jalur)
+                    elseif tipe ~= "submodule" then
+                        table.insert(daftar, {path = jalur, sha = it.optString("sha", ""), nama = it.optString("name", "")})
+                    end
+                end
+            end
+            kumpul()
+        end, true)
+    end
+
+    kumpul()
 end
 
 menuAksiFile = function(fullName, fileData, token, currentPath, repoObj)
