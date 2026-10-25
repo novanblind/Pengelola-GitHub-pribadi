@@ -31,7 +31,7 @@ import "org.json.JSONArray"
 
 local mainHandler = Handler(Looper.getMainLooper())
 
-local VERSI_SAAT_INI = "1.35"
+local VERSI_SAAT_INI = "1.40"
 local URL_RAW_SCRIPT = "https://raw.githubusercontent.com/novanblind/Pengelola-GitHub-pribadi/main/github.lua"
 local URL_API_SCRIPT = "https://api.github.com/repos/novanblind/Pengelola-GitHub-pribadi/contents/github.lua"
 
@@ -5964,25 +5964,8 @@ function PembuatAPK.ambilAPK(fullName, token, kb)
                 local tautan = targetAset.optString("browser_download_url", "")
                 local urlApi = targetAset.optString("url", "")
                 if urlApi == "" then urlApi = tautan end
-                local tag = r.optString("tag_name", "")
-                local tglRilis = r.optString("published_at", "")
-                local urlRilis = r.optString("html_url", "https://github.com/" .. fullName .. "/releases")
-
-                local pesan = "Proyek: " .. fullName
-                if tag ~= "" then pesan = pesan .. "\nVersi rilis: " .. tag end
-                pesan = pesan .. "\nNama berkas: " .. nama .. "\nUkuran: " .. formatUkuranBerkas(ukuran)
-                if tglRilis ~= "" then pesan = pesan .. "\nDirilis: " .. tglRilis end
-                pesan = pesan .. "\n\nTekan Unduh APK untuk menyimpan berkas langsung ke folder Download HP Anda."
-                if service.speak then service.speak("APK siap diunduh. " .. nama) end
-
-                PembuatAPK.dialogTombol("APK Siap Diunduh", pesan, {
-                    {"unduh APK", function()
-                        unduhLangsungKeFolderDownload(urlApi, nama, token, false, kembali, true, tautan)
-                    end},
-                    {"salin tautan unduhan", function() salinKeClipboard("Tautan APK", tautan) end, tetap = true},
-                    {"cek status pembangunan", function() PembuatAPK.cekStatus(fullName, token, kembali) end},
-                    {"buka halaman rilis di web", function() bukaBrowser(urlRilis) end},
-                }, {"kembali", kembali})
+                -- Satu ketukan: langsung mengunduh APK terbaru tanpa dialog "APK Siap Diunduh".
+                unduhLangsungKeFolderDownload(urlApi, nama, token, false, kembali, true, tautan)
                 return
             end
         end
@@ -5992,7 +5975,14 @@ function PembuatAPK.ambilAPK(fullName, token, kb)
             if okArt then
                 local objArt = JSONObject(resArt)
                 local arrArt = objArt.optJSONArray("artifacts")
-                if arrArt ~= nil and arrArt.length() > 0 then
+                if arrArt ~= nil and arrArt.length() == 1 then
+                    local satu = arrArt.getJSONObject(0)
+                    unduhLangsungKeFolderDownload(satu.optString("archive_download_url", ""),
+                        satu.optString("name", "aplikasi-apk"), token, true,
+                        function() PembuatAPK.ambilAPK(fullName, token, kembali) end)
+                    return
+                end
+                if arrArt ~= nil and arrArt.length() > 1 then
                     local daftarNama = {}
                     local daftarData = {}
 
@@ -6012,14 +6002,8 @@ function PembuatAPK.ambilAPK(fullName, token, kb)
                             local artNama = terpilih.optString("name", "aplikasi-apk")
                             local artUrl = terpilih.optString("archive_download_url", "")
 
-                            PembuatAPK.dialogTombol("Unduh & Ekstrak APK",
-                                "Berkas: " .. artNama .. "\n\nTekan Unduh APK untuk mengunduh dan otomatis mengekstrak berkas .apk ke folder Download HP Anda.",
-                                {
-                                    {"unduh APK", function()
-                                        unduhLangsungKeFolderDownload(artUrl, artNama, token, true, function() PembuatAPK.ambilAPK(fullName, token, kembali) end)
-                                    end},
-                                    {"salin tautan", function() salinKeClipboard("Tautan Artefak", artUrl) end, tetap = true},
-                                }, {"kembali", function() PembuatAPK.ambilAPK(fullName, token, kembali) end})
+                            unduhLangsungKeFolderDownload(artUrl, artNama, token, true,
+                                function() PembuatAPK.ambilAPK(fullName, token, kembali) end)
                         end
                     })
                     bPilihArt.setNegativeButton("kembali", DialogInterface.OnClickListener{
@@ -6958,6 +6942,11 @@ function TandaTangan.pakaiPribadi(fullName, token, kembali)
                     {"impor tanda tangan dari folder Download", function() TandaTangan.mulaiImpor(token, kembaliKelola, lanjutSetelah) end},
                     {"pakai tanda tangan bawaan GitHub", function() TandaTangan.pakaiBawaan(fullName, token, kembali) end},
                 }, {"kembali", ulang})
+            return
+        end
+        if #daftar == 1 then
+            -- Hanya ada satu tanda tangan pribadi: otomatis terpilih, langsung ke langkah keamanan aplikasi.
+            TandaTangan.konfirmasi(fullName, token, daftar[1], kembali)
             return
         end
         TandaTangan.pilih(fullName, token, daftar, kembali)
